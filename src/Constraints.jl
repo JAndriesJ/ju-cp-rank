@@ -1,17 +1,15 @@
-module Constraints
+module constraints
 
-proj_dir = dirname(@__FILE__)*"\\"
-include(proj_dir*"Utility.jl")
-include(proj_dir*"Moments.jl")
-using .Utility
-using .Moments
+using Test
+include(dirname(@__FILE__)*"\\"*"moments.jl")
+using .moments ; const mom = moments
 
-export  make_dag_con,
+export  α_to_Lxᵅ,
+        make_dag_con,
         make_loc_con,
         make_xx_con,
-        make_weakG_con,
+        make_ideal_con,
         make_G_con
-
 
 """
 input: A(Data matrix),t(integer),Lx(JuMP variable)
@@ -22,23 +20,21 @@ function make_dag_con(A,t,Lx)
     n = size(A)[1]
     dag_con = Dict()
 
-    mom₂ₜ     = Moments.make_mon_expo(n,2*t)
-    nb2t      = lastindex(mom₂ₜ)
-    dag_con[(0,0)] = [ 1*Lx[mom₂ₜ[i] ] for i in  1:nb2t] # This is the non negativity of the moments i.e. products of x's
+    mom₂ₜ     = mom.make_mon_expo(n,2*t)
+    dag_con[(0,0)] = [ 1*Lx[α ] for α in mom₂ₜ] # This is the non negativity of the moments i.e. products of x's
 
     deg_g = 2
-    mom₂ₜ₋₂    = Moments.make_mon_expo(n,2*t-deg_g)
-    nb2t₋₂ = lastindex(mom₂ₜ₋₂)
-    @assert nb2t₋₂ > 1 "Contraints do not exist for t =1!"
+    mom₂ₜ₋₂    = mom.make_mon_expo(n,2*t-deg_g)
+    @assert lastindex(mom₂ₜ₋₂) > 1 "Contraints do not exist for t =1!"
     for k in 1:n
-        eₖ = Utility.eₖ(n,k)
+        eₖ = mom.eᵢ(n,k)
         # Dagger constraints: L((√Aₖₖ xₖ - xₖ²)⋅u) ≧ 0 for u ∈ [x]₂ₜ₋₂
         sqrMₖₖ = sqrt(A[k,k])
-        dag_con[(k,k)] = [ sqrMₖₖ*Lx[eₖ + mom₂ₜ₋₂[i]] - Lx[2*eₖ + mom₂ₜ₋₂[i]] for i in  1:nb2t₋₂ ]
+        dag_con[(k,k)] = [ sqrMₖₖ*Lx[eₖ + α] - Lx[2*eₖ + α] for α in mom₂ₜ₋₂ ]
         for h in (k+1):n
-            eₕ = Utility.eₖ(n,h)
+            eₕ = mom.eᵢ(n,h)
             # Dagger constraints: L((Aₖₕ  - xₖxₕ)⋅u) ≧ 0 for u ∈ [x]₂ₜ₋₂
-            dag_con[(k,h)] = [ A[k,h]*Lx[mom₂ₜ₋₂[i]] - Lx[eₖ + eₕ + mom₂ₜ₋₂[i]]     for i in  1:nb2t₋₂]
+            dag_con[(k,h)] = [ A[k,h]*Lx[α] - Lx[eₖ + eₕ + α]  for α in mom₂ₜ₋₂]
         end
     end
     return dag_con
@@ -49,69 +45,32 @@ input: A(data array), LMB(moment exponent vector), Lx(JuMP variable)
 output: dictionary: Keys: (i,j) ∈ [n]²
                     vals:
 comment: L ≥ 0 on M₂ₜ(S^cp_A )
-(M_2t-2(gL) )_αβ =   √(Aᵢᵢ) x^(γ + eᵢ)  -  x^(γ + 2*eᵢ) M_2
+(M_2t-2(gL) )_αβ =   √(Aᵢᵢ) x^(γ + eᵢ)  -  x^(γ + 2*eᵢ)
 (M_2t-2(gL) )_αβ =   (Aᵢⱼ) x^γ   -  x^(γ + e₁ + eⱼ) """
 function make_loc_con(A,t,Lx)
-    n       = size(A)[1]
-    LMB     = Moments.make_mon_expo(n, t - 1)
-    nb_mon  = size(LMB)[1]
-    loc_con = Dict()
-    for k in 1:n
-        eₖ = Utility.eₖ(n,k)
-        # Constraint: diagonal of L ≧ 0 on 𝑀(Sᶜᵖ)   : M((√Aₖₖ xₖ - xₖ²)⋅L)
-        sqrAₖₖ = sqrt(A[k,k])
-        loc_con[(k,k)] = [sqrAₖₖ*Lx[LMB[i] + LMB[j] + eₖ] - Lx[LMB[i] + LMB[j] + 2*eₖ]   for i in 1:nb_mon, j in 1:nb_mon ]
-        for h in (k+1):n
-            eₕ = Utility.eₖ(n,h)
-            # Constraint: off diagonal of L ≧ 0 on 𝑀(Sᶜᵖ)   : M((Aₖₕ - xₖxₕ)⋅L)
-            loc_con[(k,h)] = [ A[k,h]*Lx[LMB[i] + LMB[j]] - Lx[LMB[i] + LMB[j] + eₖ + eₕ] for i in 1:nb_mon,  j in 1:nb_mon ]
-        end
-    end
-    return loc_con
+    n = size(A)[1]
+    momₜ₋₁  = mom.make_mon_expo(n, t-1)
+    nze = get_nonzero_entries(A)
+    if_diag(k) = [sqrt(A[k,k])*Lx[α+β+eₖ] - Lx[α+β+2*mom.eᵢ(n,k)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
+    if_off_diag(k,h) = [A[k,h]*Lx[α+β] - Lx[α+β+mom.eᵢⱼ(n,k,h)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
+    return [e[1]==e[2] ? if_diag(e[1]) : if_off_diag(e[1],e[2]) for e in nze]
 end
 
 """
 input: A(data array), LMB(moment exponent vector), Lx(JuMP variable)
 output: dictionary: Keys: (h,k) ∈ [n]², h ≠ k
                     values:
+comment: L ≥ 0 on M₂ₜ(S^cp_A )
+(M_2t-2(xₖxₕL) )_αβ =   x^(α + β + eₖ + eₕ) 
 """
 function make_xx_con(A,t,Lx)
     n       = size(A)[1]
-    LMB     = Moments.make_mon_expo(n,t-1)
-    nb_mon  = size(LMB)[1]
-    xx_con  = Dict()
-    for k in 1:n
-        eₖ = Utility.eₖ(n,k)
-        for h in (k+1):n
-            eₕ = Utility.eₖ(n,h)
-            # Localizing xx constraint: M(xₖxₕ⋅L)
-            xx_con[(k,h)] = [ Lx[LMB[i] + LMB[j] + eₖ + eₕ] for i in 1:nb_mon, j in 1:nb_mon ]
-        end
-    end
-    return xx_con
+    momₜ₋₁   = mom.make_mon_expo(n,t-1)
+    eᵢⱼs    = map( e -> mom.eᵢⱼ(n,e[1],e[2]), get_nonzero_entries(A)) 
+    return map(eᵢⱼ -> [Lx[α+β+eᵢⱼ] for α ∈ momₜ₋₁, β ∈ momₜ₋₁ ], eᵢⱼs)
 end
 
-## Tensor constraints
-"""
-Input: A(data matrix),t(Integer),Lx(JuMP variable)
-Output: L((M-([x]₌₁[x]₌₁ᵀ))⊗([x]₌ₗ[x]₌ₗᵀ)))for l ∈ 0,1,...,t-1.
-= M⊗L([x]₌ₗ[x]₌ₗᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]₌ₗ[x]₌ₗᵀ))
-"""
-function make_weakG_con(A,t,Lx)
-    n = size(A)[1]
-    weakG_con = Dict()
-    LMBexp_1 =  make_mon_expo_mat(n,(1,1),false)
-    for ℓ in 1:(t-1)
-        LMBexp_ℓ          = Moments.make_mon_expo_mat(n,(ℓ,ℓ),false)   #exponents of [x]₌ₗ[x]₌ₗᵀ
-        LMBexp_1ℓ         = Utility.var_kron(LMBexp_1,LMBexp_ℓ)    #exponents of([x]₌₁[x]₌₁ᵀ)⊗([x]₌ₗ[x]₌ₗᵀ)
-        LMB_ℓ             = Utility.index_to_var(Lx,LMBexp_ℓ)      # L([x]₌ₗ[x]₌ₗᵀ)
-        LMB_1ℓ            = Utility.index_to_var(Lx,LMBexp_1ℓ)     # L(([x]₌₁[x]₌₁ᵀ)⊗([x]₌ₗ[x]₌ₗᵀ))
 
-        A_tens_LMB_ℓ      = kron(A,LMB_ℓ)                  # M⊗L([x]₌ₗ[x]₌ₗᵀ)
-        weakG_con[ℓ]      = A_tens_LMB_ℓ - LMB_1ℓ          # M⊗L([x]₌ₗ[x]₌ₗᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]₌ₗ[x]₌ₗᵀ) ⪰ 0, ℓ ∈ 0,1,t-deg(g)/2
-    end
-    return weakG_con
-end
 
 """M(G ⊗ L) ⪰ 0 constraints
 input: A(data matrix),t(Integer),Lx(JuMP variable)
@@ -120,15 +79,70 @@ output: A⊗L([x]ₜ[x]ₜᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ
 """
 function make_G_con(A,t,Lx)
     n = size(A)[1]
-    LMBexp_1           = Moments.make_mon_expo_mat(n,(1,1),false) #exponents of [x]₌₁[x]₌₁ᵀ
-    LMBexpₜ₋₁          = Moments.make_mon_expo_mat(n,(t-1,t-1),true)#exponents of [x]ₜ₋₁[x]ₜ₋₁ᵀ
-    LMBₜ₋₁             = Utility.index_to_var(Lx,LMBexpₜ₋₁)    #L([x]ₜ₋₁[x]ₜ₋₁ᵀ)
+    LMBexp₁    = mom.make_mon_expo(n,(1,1),isle=false) #exponents of [x]₌₁[x]₌₁ᵀ
+    LMBexpₜ₋₁   = mom.make_mon_expo(n,(t-1,t-1),isle=true)#exponents of [x]ₜ₋₁[x]ₜ₋₁ᵀ
+    LMBₜ₋₁      = α_to_Lxᵅ(Lx,LMBexpₜ₋₁)    #L([x]ₜ₋₁[x]ₜ₋₁ᵀ)
 
-    LMBexp_1ₜ₋₁        = Utility.var_kron(LMBexp_1,LMBexpₜ₋₁)  #exponents of([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ)
-    LMB_1ₜ₋₁           = Utility.index_to_var(Lx,LMBexp_1ₜ₋₁)   # L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ))
+    LMBexp₁ₜ₋₁  = expo_kron(LMBexp₁,LMBexpₜ₋₁)  #exponents of([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ)
+    LMB₁ₜ₋₁     = α_to_Lxᵅ(Lx,LMBexp₁ₜ₋₁)   # L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ))
 
-    G_con = kron(A,LMBₜ₋₁) - LMB_1ₜ₋₁             # A⊗L([x]ₜ₋₁[x]ₜ₋₁ᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ))
+    G_con = kron(A,LMBₜ₋₁) - LMB₁ₜ₋₁             # A⊗L([x]ₜ₋₁[x]ₜ₋₁ᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ))
     return G_con
 end
 
+
+"""M(xᵢxⱼL) = 0  for all {i,j} s.t. Mᵢⱼ"""
+function make_ideal_con(A,t,Lx) 
+    n = size(A)[1] 
+    momₜ₋₁ = mom.make_mon_expo(n, t-1)
+    eᵢⱼs = map( e -> mom.eᵢⱼ(n,e[1],e[2]), get_zero_entries(A))
+    return map(eᵢⱼ -> [Lx[α+β+eᵢⱼ] for α ∈ momₜ₋₁, β ∈ momₜ₋₁ ], eᵢⱼs)
 end
+
+### Utility
+"""(L,[α]ᵢⱼ) → [L(xᵅ)]ᵢⱼ """
+α_to_Lxᵅ(Lx, index_array) = map(α -> Lx[α],index_array)
+get_zero_entries(M) = [ (i,j) for i in 1:(size(M)[1]-1) for j in (i+1):size(M)[1] if M[i,j] == 0]
+get_nonzero_entries(M) = [ (i,j) for i in 1:(size(M)[1]-1) for j in (i+1):size(M)[1] if M[i,j] != 0]
+
+"""A ∈ (ℕⁿ)ᵃˣᵇ, B ∈ (ℕⁿ)ᶜˣᵈ --> D ∈ (ℕⁿ)ᵃᶜˣᵇᵈ : D₍ᵢⱼ,ₖₕ₎ = Aᵢₖ + Bⱼₕ"""
+function expo_kron(A,B)
+    n₁,n₂ = size(A)
+    D = [B + repeat( [A[i,j]] , inner = (1,1), outer = size(B)) for i in 1:n₁ , j in 1:n₂ ]
+    return cat([cat(D[i,:]...,dims=2) for i in 1:n₁]...,dims=1)
+end
+
+function run_tests()
+    @testset "expo_kron" begin
+        n = 4
+        t = (2,3)
+        A = mom.make_mon_expo(n,t)
+        B = mom.make_mon_expo(n,t)
+        AOXB = expo_kron(A,B)
+        @test size(AOXB) == size(A) .* size(B) 
+    end
+end
+
+end
+
+## Tensor constraints
+# """
+# Input: A(data matrix),t(Integer),Lx(JuMP variable)
+# Output: L((M-([x]₌₁[x]₌₁ᵀ))⊗([x]₌ₗ[x]₌ₗᵀ)))for l ∈ 0,1,...,t-1.
+# = M⊗L([x]₌ₗ[x]₌ₗᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]₌ₗ[x]₌ₗᵀ))
+# """
+# function make_weakG_con(A,t,Lx)
+#     n = size(A)[1]
+#     weakG_con = Dict()
+#     LMBexp_1 =  make_mon_expo(n,(1,1),isle=false)
+#     for ℓ in 1:(t-1)
+#         LMBexp_ℓ          = mom.make_mon_expo(n,(ℓ,ℓ),isle=false)   #exponents of [x]₌ₗ[x]₌ₗᵀ
+#         LMBexp_1ℓ         = expo_kron(LMBexp_1,LMBexp_ℓ)    #exponents of([x]₌₁[x]₌₁ᵀ)⊗([x]₌ₗ[x]₌ₗᵀ)
+#         LMB_ℓ             = α_to_Lxᵅ(Lx,LMBexp_ℓ)      # L([x]₌ₗ[x]₌ₗᵀ)
+#         LMB_1ℓ            = α_to_Lxᵅ(Lx,LMBexp_1ℓ)     # L(([x]₌₁[x]₌₁ᵀ)⊗([x]₌ₗ[x]₌ₗᵀ))
+
+#         A_tens_LMB_ℓ      = kron(A,LMB_ℓ)                  # M⊗L([x]₌ₗ[x]₌ₗᵀ)
+#         weakG_con[ℓ]      = A_tens_LMB_ℓ - LMB_1ℓ          # M⊗L([x]₌ₗ[x]₌ₗᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]₌ₗ[x]₌ₗᵀ) ⪰ 0, ℓ ∈ 0,1,t-deg(g)/2
+#     end
+#     return weakG_con
+# end

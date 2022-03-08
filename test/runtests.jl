@@ -205,28 +205,3 @@ include(dirname(dirname(@__FILE__))*"\\test\\TestConstraints.jl")
 end
 
 
-A = cpMatrices.gen_cp_mats("M6")
-n = size(A)[1]
-t  = 2
-k = 3
-
-mon_expo = make_mon_expo(n,t,true)
-eₖ = get_std_base_vec(n,k)
-mon_expo_mat = make_mon_expo_mat(n,t,true)
-mom_expo_keys = make_mom_expo_keys(n,t)
-# assemble_dict,
-# var_kron,
-# var_self_kron
-
-
-using JuMP
-model        = Model()
-list_of_keys = Moments.make_mom_expo_keys(n, t)
-@variable(model,Lx[list_of_keys] )
-
-
-dag_con = Constraints.make_dag_con(A,t,Lx)
-loc_con = Constraints.make_loc_con(A,t,Lx)
-xx_con  = Constraints.make_xx_con(A,t,Lx)
-wG_con  = Constraints.make_weakG_con(A,t,Lx)
-sG_con  = Constraints.make_G_con(A,t,Lx)

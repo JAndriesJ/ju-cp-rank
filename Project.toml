@@ -3,6 +3,18 @@ uuid = "495feb78-7ac5-467c-a2d2-479ec9c190ca"
 authors = ["Andries <j.andries.j.steenkamp@gmail.com> and contributors"]
 version = "0.1.0"
 
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+Cairo = "159f3aea-2a34-519c-b102-8c37f9878175"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Fontconfig = "186bb1d3-e1f7-5a2c-a377-96d770f13627"
+GraphPlot = "a2cc645c-3eea-5389-862e-a155d0052231"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+Images = "916415d5-f1e6-5110-898d-aaa5f9f070e0"
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+Mosek = "6405355b-0ac2-5fba-af84-adbd65488c0e"
+MosekTools = "1ec41992-ff65-5c91-ac43-2df89e9693a4"
+
 [compat]
 julia = "1"
 

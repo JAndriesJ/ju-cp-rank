@@ -1,68 +1,60 @@
-module Moments
+module moments
+using Test
 
-export  make_mon_expo, # Remove this one, such that only make_mon_expo_mat is used
-        make_mon_expo_mat,
-        make_mom_expo_keys
+export  eᵢ,
+        eᵢⱼ,
+        make_mon_expo,
+        run_tests
 
+"""The standard basis vector eᵢ in dimension n"""
+eᵢ(n::Int,i::Int) = [Int(j==i) for j in 1:n]
+eᵢⱼ(n::Int,i::Int,j::Int) = [k ∈ [i,j] ? 1 : 0 for k in 1:n]
 
-"""
-input: n (integer),t(integer)
-output: exponents α ∈ Nⁿₜ of [x]≦ₜ of [x]₌ₜ (array of integers)
-coments: Has a quadratic loss in runtime because for degree t we compute degree 1 t times...
-"""
-function make_mon_expo_arr(n::Int,t::Int, isLeq::Bool = true)
-    if t == 0 # [x]₌₀
-        return zeros(Int32,1,n)
-    else # [x]₌ₜ
-        temp = make_mon_expo_arr(n,t-1,isLeq)
-        e₁ = hcat(1, zeros(Int32,1,n-1))
-        output = e₁ .+ temp
-        for i = 1:n-1
-            output = vcat(output,circshift(e₁,(0,i)) .+ temp)
+"""[x]≦ₜ := [xᵅ for all α ∈ ℕⁿₜ] or [x]₌ₜ  := [xᵅ for all α ∈ ℕⁿ≤ₜ]"""
+function make_mon_expo(n::Int,t::Int; isle::Bool = true)
+    @assert typeof(t) == Int64
+    t == 0 ? (return [eᵢ(n,0)]) : 0
+    tmp = make_mon_expo(n,t-1;isle=isle)
+    M_vec = reshape([m + eᵢ(n,i) for i ∈ 1:n, m ∈ tmp],:,1)
+    return unique(isle ? vcat(tmp,M_vec) : M_vec)
+end
+
+"""[x]≦ₜ[x]ᵀ≦ₜ or [x]₌ₜ[x]ᵀ₌ₜ"""
+function make_mon_expo(n::Int,t::Tuple{Int,Int}; isle::Bool = true)
+    M_vec1      = make_mon_expo(n,t[1]; isle=isle)
+    M_vec2      = make_mon_expo(n,t[2]; isle=isle)
+    return [mi+mj for mi in M_vec1, mj in M_vec2]
+end
+        
+###
+function run_tests()
+    @testset "standerd basis vector" begin
+        for n in 6:13
+            for k in 1:n
+                e = eᵢ(n,k)
+                @test length(e) == n
+                @test maximum(e) == 1
+                @test minimum(e) == 0
+                @test sum(e) == 1
+            end
+        end
+    end
+
+    @testset "make_mon_expo" begin
+        for n ∈ 3:9, t ∈ 0:4
+            @test size.(make_mon_expo(n,t,isle=true))[1] == (n,)
+            @test length(make_mon_expo(n,t,isle=true)) == binomial(n+t,t)
         end
 
-        if isLeq # [x]≦ₜ
-            output = vcat(temp, output)
-        end
-        return unique(output,dims=1)
+        MonBase = make_mon_expo(2,3,isle=false)
+        @test MonBase ==  [ [3, 0],[2, 1],[1, 2],[0, 3]]
+
+        MonBase = make_mon_expo(2,4,isle=false)
+        @test MonBase ==  [[4, 0],[3, 1],[2, 2],[1, 3],[0, 4]]
+
+        MB = make_mon_expo(2,(3,3),isle=true)
+        @test size(MB) == (binomial(2+3,3),binomial(2+3,3))
     end
 end
-
-"""
-input: n (integer),t(integer)
-output: exponents α ∈ Nⁿₜ of [x]≦ₜ of [x]₌ₜ (array of arrays of integers)
-"""
-function make_mon_expo(n::Int,t::Int, isLeq::Bool = true)
-    mon_expo_arr = make_mon_expo_arr(n,t,isLeq)
-    mon_expo     = [r  for r in  eachrow(mon_expo_arr)]
-    return mon_expo
-end
-
-
-"""
-input: n(integer),t(integer)
-output: exponents α ∈ Nⁿₜ of [x]≦ₜ[x]≦ₜᵀ or [x]₌ₜ[x]₌ₜᵀ where , x = (x₁,x₂,...,xₙ)
-"""
-function make_mon_expo_mat(n::Int,t::Tuple{Int64,Int64},isLeq::Bool = true)
-    mon1      = make_mon_expo(n,t[1], isLeq)
-    mon2      = make_mon_expo(n,t[2], isLeq)
-    nb_mon1   = length(mon1)
-    nb_mon2   = length(mon2)
-    xxᵀₜ_vec = [ mon1[i]  + mon2[j] for i in 1:nb_mon1 for j in 1:nb_mon2]
-
-    xxᵀₜ     = reshape(xxᵀₜ_vec, (nb_mon1, nb_mon2) )
-    return xxᵀₜ
-end
-
-"""
-input:  n(integer),t(integer)
-output: array: unique exponents in [x]≦ₜ[x]≦ₜᵀ γ ∈ N_2t^n, values are indeces in
-                    moment matrix array of (α,β) ∈ (N_2t^n)^2 such that α + β = γ
-"""
-function make_mom_expo_keys(n::Int,t::Int)
-    mon_vec = make_mon_expo(n,t)
-    return unique( [ α + β for α in mon_vec, β in mon_vec ])
-end
-
 
 end
