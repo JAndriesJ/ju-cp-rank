@@ -4,10 +4,10 @@ using LinearAlgebra
 using CSV, DataFrames
 
 export  get_Bomze_cp_mats,
+        get_Nie_Mats,
         get_random_cp_mats,
         get_random_sparse_cp_mats,
         gen_random_band_mat,
-        get_zero_entries,
         run_tests
 
 ## Examples
@@ -66,15 +66,31 @@ function get_Bomze_cp_mats()
     return cpmatDict
 end
 
+function get_Nie_Mats()
+    C6_1 = [6 4 1 2 2
+            4 6 0 1 3
+            1 0 3 1 2
+            2 1 1 2 1
+            2 3 2 1 5] .+ 0.0
+    nC6_2 = [1 1 0 0 1
+             1 2 1 0 0
+             0 1 2 1 0
+             0 0 1 2 1
+             1 0 0 1 6] .+ 0.0
+    return [C6_1,nC6_2]
+end
+
 function get_random_cp_mats(n,r)
     a = rand(n,r)
-    return sum([a[:,k]*a[:,k]' for k ∈ 1:r ])    
+    return r, a, sum([a[:,k]*a[:,k]' for k ∈ 1:r ])    
 end
 
 function get_random_sparse_cp_mats(M::Matrix{Int64})
     n = size(M)[1]
     nze = get_nonzero_entries(M)
-    sum([ rXᵢⱼ(n,e[1],e[2]) for e in nze]) + diagm(rand(n))
+    R = cat([ reᵢⱼ(n,e[1],e[2]) for e in nze]...,dims=2)
+    r = size(R)[2]
+    return r,R,(R*R' .+ 0.0)
 end
 get_random_sparse_cp_mats(n::Int,p::Float64=0.5) = get_random_sparse_cp_mats(gen_random_sparcity_mat(n,p))
 

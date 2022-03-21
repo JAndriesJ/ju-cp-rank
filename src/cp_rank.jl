@@ -1,22 +1,18 @@
 module cp_rank
 
 using CSV, DataFrames
-using Images
-using Plots
-
 
 proj_dir = dirname(@__FILE__)*"\\"
 include(proj_dir*"cp_matrices.jl")
-include(proj_dir*"moments.jl")
-include(proj_dir*"constraints.jl")
+# include(proj_dir*"moments.jl")
+# include(proj_dir*"constraints.jl")
 include(proj_dir*"cp_model.jl")
-include(proj_dir*"compute.jl")
 
 using .cp_matrices ; const cpm = cp_matrices
-using .moments ; const mom = moments
-using .constraints ; const con = constraints
+# using .moments ; const mom = moments
+# using .constraints ; const con = constraints
 using .cp_model  
-using .compute 
+
 
 export get_ξₜᶜᵖ,
        save_mat,
@@ -26,18 +22,18 @@ export get_ξₜᶜᵖ,
        get_Bomze_cp_mats,
        get_random_cp_mat,
        get_random_sparse_cp_mat,
-       gen_random_band_mat,
-       show_mat_support
+       gen_random_band_mat
            
 get_Bomze_cp_mats() = cpm.get_Bomze_cp_mats()
 get_random_cp_mat(n,r) = cpm.get_random_cp_mats(n,r)
 get_random_sparse_cp_mat(M::Matrix{Int64}) = cpm.get_random_sparse_cp_mats(M)
 get_random_sparse_cp_mat(n::Int,p::Float64=0.5) = cpm.get_random_sparse_cp_mats(cpm.gen_random_sparcity_mat(n,p))
 gen_random_band_mat(n,k) = cpm.gen_random_band_mat(n,k)
-show_mat_support(M) = Gray.(Int.(M .> 0))
 
-# make mat sparse 
-get_ξₜᶜᵖ(M,t,conlist) = compute.computeξₜᶜᵖ(cp_model.modelξₜᶜᵖ(M,t,conlist))
+
+get_ξₜᶜᵖ(M,t,conlist) = cp_model.computeξₜᶜᵖ(cp_model.modelξₜᶜᵖ(M,t,conlist))
+
+
 
 ### Save the computations ------
 function run_and_save_get_ξₜᶜᵖ(rsM_n ,t ,cons, save_path)

@@ -1,16 +1,18 @@
 module cp_model
-using LinearAlgebra
-const la = LinearAlgebra
+using LinearAlgebra ; const la = LinearAlgebra
 using JuMP
+using MosekTools # The solver that we use.
 
 
 proj_dir = dirname(@__FILE__)*"\\"
 include(proj_dir*"moments.jl")
 include(proj_dir*"constraints.jl")
+
 using .moments ; const mom = moments
 using .constraints ; const con = constraints
 
 export modelξₜᶜᵖ,
+       computeξₜᶜᵖ,
        rec_mom_mat
 
 function modelξₜᶜᵖ(A,t,conlist)
@@ -18,7 +20,7 @@ function modelξₜᶜᵖ(A,t,conlist)
     model = Model()
     @variable(model, Lx[mom.make_mon_expo(n,2*t)] ) # Define variables in the moment matrix.
 ## Build the moment matrix and constrain it to be PSD.
-    mom_matₜ_expo = mom.make_mon_expo(n,(t,t))
+    mom_matₜ_expo = mom.make_mon_expo(n,(t,t),A)
     mom_matₜ      = con.α_to_Lxᵅ(Lx, mom_matₜ_expo)
     @constraint(model, la.Symmetric(mom_matₜ) in PSDCone())
 # Second order Moment constraints
@@ -52,7 +54,7 @@ function modelξₜᶜᵖ(A,t,conlist)
         G_con = con.make_G_con(A,t,Lx)
         @constraint(model, la.Symmetric(G_con) in PSDCone())
     end
-
+# Ideal constraints
     if occursin("id",conlist)
         println("----------------G-constraints are active")
         for c in con.make_ideal_con(A,t,Lx)
@@ -66,16 +68,56 @@ function modelξₜᶜᵖ(A,t,conlist)
     return model
 end
 
-function rec_mom_mat(n::Int64,t::Int64,ξₜᶜᵖ)
+
+"""This is where the ξₜᶜᵖ is calculated for matrix A """
+function computeξₜᶜᵖ(model)
+    set_optimizer(model, Mosek.Optimizer)
+    optimize!(model) 
+    # output results
+    println("Primal: ", primal_status(model))
+    println("Dual: ", dual_status(model))
+    println("Objective: ", objective_value(model))
+    return model
+end
+
+
+
+#Post processing--------------------------------------------------------------
+
+function rec_mom_mat(n::Int64,t::Tuple{Int64, Int64},ξₜᶜᵖ)
     Lx      = ξₜᶜᵖ.obj_dict[:Lx]
-    MB_exp  = mom.make_mon_expo(n,(t,t))
+    MB_exp  = mom.make_mon_expo(n,t)
     MB      = con.α_to_Lxᵅ(Lx, MB_exp)
     return JuMP.value.(MB)
 end
-function rec_mom_mat(A::Matrix{Vector{Int64}},ξₜᶜᵖ)
+
+function rec_mom_mat(n::Int64,t::Int64,ξₜᶜᵖ)
+    Lx      = ξₜᶜᵖ.obj_dict[:Lx]
+    MB_exp  = mom.make_mon_expo(n,t)
+    MB      = con.α_to_Lxᵅ(Lx, MB_exp)
+    return JuMP.value.(MB)
+end
+
+function rec_mom_mat(A,ξₜᶜᵖ)
     Lx      = ξₜᶜᵖ.obj_dict[:Lx]
     MB      = con.α_to_Lxᵅ(Lx,A)
     return JuMP.value.(MB)
+end
+
+function rec_mom_mat(n::Int64,t::Int64, ξₜᶜᵖ, mon_cliques)
+    mon = mom.make_mon_expo(n,t)
+    cliq_ordering = mom.order_monomials(mon, mon_cliques)
+    cliq_ordered_mon = mom.make_mon_expo(mon[cliq_ordering])
+    return rec_mom_mat(cliq_ordered_mon, ξₜᶜᵖ)
+end
+
+
+
+
+function check_faltness(n::Int64,t1::Int64,t2::Int64, ξₜ₁ᶜᵖ, ξₜ₂ᶜᵖ)
+    mom_mat_1 = rec_mom_mat(n,t1,ξₜ₁ᶜᵖ)
+    mom_mat_2 = rec_mom_mat(n,t2,ξₜ₂ᶜᵖ)
+    return la.rank(mom_mat_1) == la.rank(mom_mat_2)
 end
 
 

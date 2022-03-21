@@ -28,13 +28,11 @@ function make_dag_con(A,t,Lx)
     @assert lastindex(mom₂ₜ₋₂) > 1 "Contraints do not exist for t =1!"
     for k in 1:n
         eₖ = mom.eᵢ(n,k)
-        # Dagger constraints: L((√Aₖₖ xₖ - xₖ²)⋅u) ≧ 0 for u ∈ [x]₂ₜ₋₂
         sqrMₖₖ = sqrt(A[k,k])
-        dag_con[(k,k)] = [ sqrMₖₖ*Lx[eₖ + α] - Lx[2*eₖ + α] for α in mom₂ₜ₋₂ ]
+        dag_con[(k,k)] = [ sqrMₖₖ*Lx[eₖ + α] - Lx[2*eₖ + α] for α in mom₂ₜ₋₂] # Dagger constraints: L((√Aₖₖ xₖ - xₖ²)⋅u) ≧ 0 for u ∈ [x]₂ₜ₋₂
         for h in (k+1):n
             eₕ = mom.eᵢ(n,h)
-            # Dagger constraints: L((Aₖₕ  - xₖxₕ)⋅u) ≧ 0 for u ∈ [x]₂ₜ₋₂
-            dag_con[(k,h)] = [ A[k,h]*Lx[α] - Lx[eₖ + eₕ + α]  for α in mom₂ₜ₋₂]
+            dag_con[(k,h)] = [ A[k,h]*Lx[α] - Lx[eₖ + eₕ + α]  for α in mom₂ₜ₋₂] # Dagger constraints: L((Aₖₕ  - xₖxₕ)⋅u) ≧ 0 for u ∈ [x]₂ₜ₋₂
         end
     end
     return dag_con
@@ -49,12 +47,16 @@ comment: L ≥ 0 on M₂ₜ(S^cp_A )
 (M_2t-2(gL) )_αβ =   (Aᵢⱼ) x^γ   -  x^(γ + e₁ + eⱼ) """
 function make_loc_con(A,t,Lx)
     n = size(A)[1]
-    momₜ₋₁  = mom.make_mon_expo(n, t-1)
-    nze = get_nonzero_entries(A)
-    if_diag(k) = [sqrt(A[k,k])*Lx[α+β+eₖ] - Lx[α+β+2*mom.eᵢ(n,k)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
+    nze = mom.get_nonzero_entries(A)
+    momₜ₋₁  = mom.make_mon_expo(n, t-1, A)
+    # if_diag(k) = [sqrt(A[k,k])*Lx[α+β+mom.eᵢ(n,k)] - Lx[α+β+2*mom.eᵢ(n,k)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
+    # if_off_diag(k,h) = [A[k,h]*Lx[α+β] - Lx[α+β+mom.eᵢⱼ(n,k,h)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
+    momₜ₋₁g(j)  = mom.make_mon_expo(n, t-1, A,j)
+    if_diag(k) = [sqrt(A[k,k])*Lx[α+β+mom.eᵢ(n,k)] - Lx[α+β+2*mom.eᵢ(n,k)] for α ∈ momₜ₋₁g(k), β ∈ momₜ₋₁g(k)]
     if_off_diag(k,h) = [A[k,h]*Lx[α+β] - Lx[α+β+mom.eᵢⱼ(n,k,h)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
     return [e[1]==e[2] ? if_diag(e[1]) : if_off_diag(e[1],e[2]) for e in nze]
 end
+
 
 """
 input: A(data array), LMB(moment exponent vector), Lx(JuMP variable)
@@ -66,11 +68,9 @@ comment: L ≥ 0 on M₂ₜ(S^cp_A )
 function make_xx_con(A,t,Lx)
     n       = size(A)[1]
     momₜ₋₁   = mom.make_mon_expo(n,t-1)
-    eᵢⱼs    = map( e -> mom.eᵢⱼ(n,e[1],e[2]), get_nonzero_entries(A)) 
+    eᵢⱼs    = map( e -> mom.eᵢⱼ(n,e[1],e[2]), mom.get_nonzero_entries(A)) 
     return map(eᵢⱼ -> [Lx[α+β+eᵢⱼ] for α ∈ momₜ₋₁, β ∈ momₜ₋₁ ], eᵢⱼs)
 end
-
-
 
 """M(G ⊗ L) ⪰ 0 constraints
 input: A(data matrix),t(Integer),Lx(JuMP variable)
@@ -80,7 +80,7 @@ output: A⊗L([x]ₜ[x]ₜᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ
 function make_G_con(A,t,Lx)
     n = size(A)[1]
     LMBexp₁    = mom.make_mon_expo(n,(1,1),isle=false) #exponents of [x]₌₁[x]₌₁ᵀ
-    LMBexpₜ₋₁   = mom.make_mon_expo(n,(t-1,t-1),isle=true)#exponents of [x]ₜ₋₁[x]ₜ₋₁ᵀ
+    LMBexpₜ₋₁   = mom.make_mon_expo(n,(t-1,t-1),A)     #exponents of [x]ₜ₋₁[x]ₜ₋₁ᵀ
     LMBₜ₋₁      = α_to_Lxᵅ(Lx,LMBexpₜ₋₁)    #L([x]ₜ₋₁[x]ₜ₋₁ᵀ)
 
     LMBexp₁ₜ₋₁  = expo_kron(LMBexp₁,LMBexpₜ₋₁)  #exponents of([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ)
@@ -94,16 +94,15 @@ end
 """M(xᵢxⱼL) = 0  for all {i,j} s.t. Mᵢⱼ"""
 function make_ideal_con(A,t,Lx) 
     n = size(A)[1] 
-    momₜ₋₁ = mom.make_mon_expo(n, t-1)
-    eᵢⱼs = map( e -> mom.eᵢⱼ(n,e[1],e[2]), get_zero_entries(A))
+    momₜ₋₁ = mom.make_mon_expo(n, t-1,A)
+    eᵢⱼs = map( e -> mom.eᵢⱼ(n,e[1],e[2]), mom.get_zero_entries(A))
     return map(eᵢⱼ -> [Lx[α+β+eᵢⱼ] for α ∈ momₜ₋₁, β ∈ momₜ₋₁ ], eᵢⱼs)
 end
 
 ### Utility
 """(L,[α]ᵢⱼ) → [L(xᵅ)]ᵢⱼ """
 α_to_Lxᵅ(Lx, index_array) = map(α -> Lx[α],index_array)
-get_zero_entries(M) = [ (i,j) for i in 1:(size(M)[1]-1) for j in (i+1):size(M)[1] if M[i,j] == 0]
-get_nonzero_entries(M) = [ (i,j) for i in 1:(size(M)[1]-1) for j in (i+1):size(M)[1] if M[i,j] != 0]
+
 
 """A ∈ (ℕⁿ)ᵃˣᵇ, B ∈ (ℕⁿ)ᶜˣᵈ --> D ∈ (ℕⁿ)ᵃᶜˣᵇᵈ : D₍ᵢⱼ,ₖₕ₎ = Aᵢₖ + Bⱼₕ"""
 function expo_kron(A,B)
