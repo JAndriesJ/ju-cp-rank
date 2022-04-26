@@ -1,16 +1,30 @@
 module moments
 using Test
 using Graphs
+using LinearAlgebra
 
 export  eᵢ,
-        eᵢⱼ,
         make_mon_expo,
+        get_maximal_cliques,
         get_monomial_cliques,
+        expo_kron,
+        get_mat_support,
+        get_mom_cliq_supp,
+        get_mom_mat_supp,
+        get_ten_con_supp,
         run_tests
+       
+        
 
 """The standard basis vector eᵢ in dimension n"""
 eᵢ(n::Int,i::Int) = [Int(j==i) for j in 1:n]
-eᵢⱼ(n::Int,i::Int,j::Int) = [k ∈ [i,j] ? 1 : 0 for k in 1:n]
+function eᵢ(n::Int,i::Int,j::Int) 
+    if i == j
+        return [k == i ? 2 : 0 for k in 1:n]
+    else
+        return [k ∈ [i,j] ? 1 : 0 for k in 1:n]
+    end
+end
 
 """[x]≦ₜ := [xᵅ for all α ∈ ℕⁿₜ] or [x]₌ₜ  := [xᵅ for all α ∈ ℕⁿ≤ₜ]"""
 function make_mon_expo(n::Int,t::Int; isle::Bool = true)
@@ -20,67 +34,65 @@ function make_mon_expo(n::Int,t::Int; isle::Bool = true)
     M_vec = reshape([m + eᵢ(n,i) for i ∈ 1:n, m ∈ tmp],:,1)
     return unique(isle ? vcat(tmp,M_vec) : M_vec)
 end
-
 """[x]≦ₜ[x]ᵀ≦ₜ or [x]₌ₜ[x]ᵀ₌ₜ"""
-function make_mon_expo(n::Int,t::Tuple{Int,Int}; isle::Bool = true)
-    M_vec1      = make_mon_expo(n,t[1]; isle=isle)
-    M_vec2      = make_mon_expo(n,t[2]; isle=isle)
-    return [mi+mj for mi in M_vec1, mj in M_vec2]
-end
-
+make_mon_expo(n::Int,t::Tuple{Int,Int}; isle::Bool = true) = make_mon_expo(make_mon_expo(n,t[1]; isle=isle), make_mon_expo(n,t[2]; isle=isle))
 make_mon_expo(mom::Vector{Vector{Int64}}) = make_mon_expo(mom,mom) 
 make_mon_expo(mom₁::Vector{Vector{Int64}},mom₂::Vector{Vector{Int64}}) = [α+β for α ∈ mom₁, β ∈ mom₂]
+make_mon_expo(t::Int,M::Matrix{Float64}) = unique(cat(get_monomial_cliques(t,M)[1:end-1]...,dims=1))
+make_mon_expo(t::Tuple{Int,Int},M) = make_mon_expo(make_mon_expo(t[1],M),make_mon_expo(t[2],M))
+make_mon_expo(t::Int,M::Matrix{Float64},j) = unique(cat(get_monomial_cliques(t,M,j)[1:end-1]...,dims=1))
+make_mon_expo(t::Tuple{Int,Int},M,j) = make_mon_expo(make_mon_expo(t[1],M,j),make_mon_expo(t[2],M,j))
 
-### Sparsity 
-
-get_zero_entries(M) = [ (i,j) for i in 1:(size(M)[1]-1) for j in (i+1):size(M)[1] if M[i,j] == 0]
-get_nonzero_entries(M) = [(i,j) for i in 1:(size(M)[1]-1) for j in i:size(M)[1] if M[i,j] != 0]
+## Sparsity 
+### Cliques
 get_maximal_cliques(M) = Graphs.maximal_cliques(Graph(M .> 0))
-#---
-# function get_monomial_cliques(n,t,M,j) 
-#     @assert j ∈ [1:n...]
-#     Iks = get_monomial_cliques(n,t,M)
-#     [ I in Iks]
 
-# end
-
-
-function get_monomial_cliques(n,t,mc::Vector{Vector{Int64}}) 
+"""[x]≦ₜ ᵥₖ[x]ᵀ≦ₜ ᵥₖ """
+function get_monomial_cliques(n::Int,t::Int,mc::Vector{Vector{Int64}}) 
     Iks = [get_mon_clique(n,t,c) for c in mc]
-    Iks[1] = unique([intersect(Iks...)..., Iks[1]...]) # put the intersetion first
-    mon = make_mon_expo(n,t)
-    Iks_comp = setdiff(mon, union(Iks...))
+    Iks_comp = setdiff(make_mon_expo(n,t), union(Iks...))
     return [Iks..., Iks_comp]
 end
-get_monomial_cliques(n,t,M::Matrix{Float64}) = get_monomial_cliques(n,t,get_maximal_cliques(M))
-function get_monomial_cliques(n,t::Int,M::Matrix{Float64},j::Int)
+get_monomial_cliques(t::Int,M::Matrix{Float64}) = get_monomial_cliques(size(M)[1],t,get_maximal_cliques(M))
+get_monomial_cliques(t::Tuple{Int,Int},M::Matrix{Float64}) = [make_mon_expo(m,m) for m in get_monomial_cliques(t[1],M)]
+function get_monomial_cliques(t::Int,M::Matrix{Float64},j::Int)
+    n = size(M)[1]
     @assert j ∈ [1:n...]
-    Ik_s = get_monomial_cliques(n,t,M)
+    Ik_s = get_monomial_cliques(t,M)
     supp_of_Iks = get_supp_of_Iks(Ik_s)
     Ik_s_j  = push!(j .∈ supp_of_Iks, 0)
     Ik_s_nj = push!(j .∉ supp_of_Iks, 1)
     return cat(Ik_s[Ik_s_j],[union(Ik_s[Ik_s_nj]...)],dims=1)
 end
+get_monomial_cliques(t::Tuple{Int,Int},M::Matrix{Float64},j::Int) = [make_mon_expo(m,m) for m in get_monomial_cliques(t[1],M,j)]
+
 get_supp_of_Iks(Ik_s) = [union(map(i->findall(i .> 0),I)...) for I in Ik_s[1:end-1] ]
 get_mon_clique(n,t,c) = map(v->embed(v,c,n), make_mon_expo(length(c),t))
 embed(v,α,n) = [i ∈ α ? popfirst!(v) : 0  for i in 1:n]
-#---
-make_mon_expo(n,t,mc::Vector{Vector{Int64}}) = unique(cat(get_monomial_cliques(n,t,mc)[1:end-1]...,dims=1))
-make_mon_expo(n,t::Int,M::Matrix{Float64}) = unique(cat(get_monomial_cliques(n,t,M)[1:end-1]...,dims=1))
-make_mon_expo(n,t::Tuple{Int,Int},M) = make_mon_expo(make_mon_expo(n,t[1],M),make_mon_expo(n,t[2],M))
-#---
-make_mon_expo(n,t::Int,M::Matrix{Float64},j) = unique(cat(get_monomial_cliques(n,t,M,j)[1:end-1]...,dims=1))
-make_mon_expo(n,t::Tuple{Int,Int},M,j) = make_mon_expo(make_mon_expo(n,t[1],M),make_mon_expo(n,t[2],M))
 
 
-function order_monomials(mon, mon_cliques)
-    k = length(mon_cliques) - 1
-    mon_cli_index  = map(m -> findall([m in mc for mc in mon_cliques]), mon)
-    sp = sortperm(mon_cli_index)
-    intersection = findall(map(c -> c == 1:k, mon_cli_index))
-    sp = setdiff(sp,intersection)
-    return cat(intersection,sp,dims=1)
+### supports
+get_supp_mat(M) = (M .> 0.0) .+ 0
+get_supp_mom_mat(t,M) = (sum(get_supp_mom_cliq(t,M)) .> 0) .+ 0
+get_supp_ten_con(t,M) = kron(get_supp_mat(M), get_mom_mat_supp(t,M)) 
+function get_supp_mom_cliq(t,M)
+    MCs = get_monomial_cliques(t,M)
+    Yᵏs = [[[α,β] for α ∈ m, β ∈ m] for m in MCs]
+    mvₜ = make_mon_expo(t,M)
+    return [[ any([α,β] ∈ Yᵏ) ? 1 : 0 for α ∈ mvₜ , β ∈ mvₜ] for Yᵏ in Yᵏs ]
 end
+
+## Utilities
+"""A ∈ (ℕⁿ)ᵃˣᵇ, B ∈ (ℕⁿ)ᶜˣᵈ --> D ∈ (ℕⁿ)ᵃᶜˣᵇᵈ : D₍ᵢⱼ,ₖₕ₎ = Aᵢₖ + Bⱼₕ"""
+function expo_kron(A,B)
+    n₁,n₂ = size(A)
+    D = [B + repeat( [A[i,j]] , inner = (1,1), outer = size(B)) for i in 1:n₁ , j in 1:n₂ ]
+    return cat([cat(D[i,:]...,dims=2) for i in 1:n₁]...,dims=1)
+end
+
+get_zero_entries(M) = [ (i,j) for i in 1:(size(M)[1]-1) for j in (i+1):size(M)[1] if M[i,j] == 0]
+get_nonzero_entries(M) = [(i,j) for i in 1:size(M)[1] for j in i:size(M)[1] if M[i,j] != 0]
+
 
 
 ### Tests
@@ -95,6 +107,11 @@ function run_tests()
                 @test sum(e) == 1
             end
         end
+
+        # I = rand(1:9,4)
+        # e = eᵢ(maximum(I),I)
+        # @test length(e) == maximum(I)
+        # @test sum(e .== 0) == (maximum(I) - 4)
     end
 
     @testset "make_mon_expo" begin
@@ -114,6 +131,30 @@ function run_tests()
 
         @test make_mon_expo(make_mon_expo(2,3)) == make_mon_expo(2,(3,3))
     end
+
+    @testset "expo_kron" begin
+        n = 4
+        t = (2,3)
+        A = make_mon_expo(n,t)
+        B = make_mon_expo(n,t)
+        AOXB = expo_kron(A,B)
+        @test size(AOXB) == size(A) .* size(B) 
+    end
+
+    @testset "Misc" begin
+        M = [1 0 ; 0 1]
+        println(get_zero_entries(M))
+        println(get_nonzero_entries(M))
+        @test get_zero_entries(M) == [(1, 2)]
+        @test get_nonzero_entries(M) == [(1, 1), (2, 2)]
+
+        @test get_supp_mat(M) == M
+        # get_supp_mom_mat(t,M) 
+        # get_supp_ten_con(t,M) 
+
+    end
+
 end
 
 end
+
