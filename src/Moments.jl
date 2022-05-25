@@ -8,13 +8,7 @@ export  eᵢ,
         get_maximal_cliques,
         get_monomial_cliques,
         expo_kron,
-        get_mat_support,
-        get_mom_cliq_supp,
-        get_mom_mat_supp,
-        get_ten_con_supp,
         run_tests
-       
-        
 
 """The standard basis vector eᵢ in dimension n"""
 eᵢ(n::Int,i::Int) = [Int(j==i) for j in 1:n]
@@ -71,16 +65,7 @@ get_mon_clique(n,t,c) = map(v->embed(v,c,n), make_mon_expo(length(c),t))
 embed(v,α,n) = [i ∈ α ? popfirst!(v) : 0  for i in 1:n]
 
 
-### supports
-get_supp_mat(M) = (M .> 0.0) .+ 0
-get_supp_mom_mat(t,M) = (sum(get_supp_mom_cliq(t,M)) .> 0) .+ 0
-get_supp_ten_con(t,M) = kron(get_supp_mat(M), get_mom_mat_supp(t,M)) 
-function get_supp_mom_cliq(t,M)
-    MCs = get_monomial_cliques(t,M)
-    Yᵏs = [[[α,β] for α ∈ m, β ∈ m] for m in MCs]
-    mvₜ = make_mon_expo(t,M)
-    return [[ any([α,β] ∈ Yᵏ) ? 1 : 0 for α ∈ mvₜ , β ∈ mvₜ] for Yᵏ in Yᵏs ]
-end
+
 
 ## Utilities
 """A ∈ (ℕⁿ)ᵃˣᵇ, B ∈ (ℕⁿ)ᶜˣᵈ --> D ∈ (ℕⁿ)ᵃᶜˣᵇᵈ : D₍ᵢⱼ,ₖₕ₎ = Aᵢₖ + Bⱼₕ"""
@@ -158,3 +143,18 @@ end
 
 end
 
+### supports
+# get_mat_support,
+# get_mom_cliq_supp,
+# get_mom_mat_supp,
+# get_ten_con_supp,
+
+# get_supp_mat(M) = (M .> 0.0) .+ 0
+# get_supp_mom_mat(t,M) = (sum(get_supp_mom_cliq(t,M)) .> 0) .+ 0
+# get_supp_ten_con(t,M) = kron(get_supp_mat(M), get_mom_mat_supp(t,M)) 
+# function get_supp_mom_cliq(t,M)
+#     MCs = get_monomial_cliques(t,M)
+#     Yᵏs = [[[α,β] for α ∈ m, β ∈ m] for m in MCs]
+#     mvₜ = make_mon_expo(t,M)
+#     return [[ any([α,β] ∈ Yᵏ) ? 1 : 0 for α ∈ mvₜ , β ∈ mvₜ] for Yᵏ in Yᵏs ]
+# end

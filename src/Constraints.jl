@@ -5,102 +5,197 @@ include(dirname(@__FILE__)*"\\"*"moments.jl")
 using .moments ; const mom = moments
 
 export  α_to_Lxᵅ,
-        make_dag_con,
-        make_loc_con,
-        make_xx_con,
+        make_loc_con, # Dense
         make_G_con,
-        make_ideal_con
-       
+        make_ideal_con, 
+        make_dag_con, 
+        make_xx_con,
+        make_spar_inds, # Sparse
+        make_spar_sec_ord_mom_con, 
+        make_spar_mom_mat_con, 
+        make_spar_dag_con, 
+        make_spar_xx_con,  
+        make_spar_loc_con, 
+        make_spar_G_con, 
+        make_obj 
+ 
+        
 """
-input: A(Data matrix),t(integer),Lx(JuMP variable)
-output: dictionary: keys:
-L(gu) ≥ 0 for g ∈ {1} ∪ Sᶜᵖ_A and u ∈ [x]_2t−deg(g)
+input: A(Data matrix),t(integer),Y(JuMP variable)
+output: L(gu) ≥ 0 for g ∈ {1} ∪ Sᶜᵖ_A and u ∈ [x]_2t−deg(g)
 """
-function make_dag_con(A,t,Lx)
+function make_dag_con(A,t,Y)
     n = size(A)[1]
-    dag_con = Dict()
-
-    mom₂ₜ     = mom.make_mon_expo(n,2*t)
-    dag_con[(0,0)] = [ 1*Lx[α ] for α in mom₂ₜ] # This is the non negativity of the moments i.e. products of x's
-
-    deg_g = 2
-    mom₂ₜ₋₂    = mom.make_mon_expo(n,2*t-deg_g)
-    @assert lastindex(mom₂ₜ₋₂) > 1 "Contraints do not exist for t =1!"
-    for k in 1:n
-        eₖ = mom.eᵢ(n,k)
-        sqrMₖₖ = sqrt(A[k,k])
-        dag_con[(k,k)] = [ sqrMₖₖ*Lx[eₖ + α] - Lx[2*eₖ + α] for α in mom₂ₜ₋₂] # Dagger constraints: L((√Aₖₖ xₖ - xₖ²)⋅u) ≧ 0 for u ∈ [x]₂ₜ₋₂
-        for h in (k+1):n
-            eₕ = mom.eᵢ(n,h)
-            dag_con[(k,h)] = [ A[k,h]*Lx[α] - Lx[eₖ + eₕ + α]  for α in mom₂ₜ₋₂] # Dagger constraints: L((Aₖₕ  - xₖxₕ)⋅u) ≧ 0 for u ∈ [x]₂ₜ₋₂
-        end
-    end
-    return dag_con
+    mom₂ₜ   = moments.make_mon_expo(2*t,A)
+    mom₂ₜ₋₂ = moments.make_mon_expo(2*t-2,A)
+    # L(u) for u ∈ [x]₂ₜ
+    oddone = [[ 1*Y[α ] for α in mom₂ₜ]]
+    # L((√Aₖₖ xₖ - xₖ²)⋅u) for u ∈ [x]₂ₜ₋₂
+    ondiag = [[ sqrt(A[i,i])*Y[a] - Y[2*mom.eᵢ(n,i) + a]  for a in mom₂ₜ₋₂] for i ∈ 1:n ]
+    # L((Aₖₕ  - xₖxₕ)⋅u) for u ∈ [x]₂ₜ₋₂
+    offdiag = [[ A[i,j]*Y[a] - Y[mom.eᵢ(n,i) + mom.eᵢ(n,j) + a]  for a in mom₂ₜ₋₂] for i ∈ 1:n for j ∈ i+1:n]
+    return [oddone..., offdiag..., ondiag...]
+end
+   
+"""
+input: A(Data matrix), t(integer), Y(JuMP variable)
+output: L(xᵢxⱼu) ⪰ 0 for u ∈ [x]₂ₜ₋₂ and i,j ∈ [n]
+"""
+function make_xx_con(A,t,Y)
+    n = size(A)[1]
+    mom₁ₜ₋₁ = mom.make_mon_expo(t-1,A)
+    # L(xᵢxⱼu) for g ∈ {1} ∪ Sᶜᵖ_A and i,j ∈ [n]
+    return [[ Y[a + b + mom.eᵢ(n,i) + mom.eᵢ(n,j)]  for a in mom₁ₜ₋₁, b ∈ mom₁ₜ₋₁] for i ∈ 1:n for j ∈ i:n if A[i,j] != 0.0]
 end
 
 """
-input: A(data array), LMB(moment exponent vector), Lx(JuMP variable)
+input: A(data array), LMB(moment exponent vector), Y(JuMP variable)
 output: dictionary: Keys: (i,j) ∈ [n]²
                     vals:
 comment: L ≥ 0 on M₂ₜ(S^cp_A )
 (M_2t-2(gL) )_αβ =   √(Aᵢᵢ) x^(γ + eᵢ)  -  x^(γ + 2*eᵢ)
 (M_2t-2(gL) )_αβ =   (Aᵢⱼ) x^γ   -  x^(γ + e₁ + eⱼ) """
-function make_loc_con(A,t,Lx)
+function make_loc_con(A,t,Y)
     n = size(A)[1]
     nze = mom.get_nonzero_entries(A)
     momₜ₋₁  = mom.make_mon_expo(t-1, A)
-    # if_diag(k) = [sqrt(A[k,k])*Lx[α+β+mom.eᵢ(n,k)] - Lx[α+β+2*mom.eᵢ(n,k)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
-    # if_off_diag(k,h) = [A[k,h]*Lx[α+β] - Lx[α+β+mom.eᵢⱼ(n,k,h)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
+    # if_diag(k) = [sqrt(A[k,k])*Y[α+β+mom.eᵢ(n,k)] - Y[α+β+2*mom.eᵢ(n,k)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
+    # if_off_diag(k,h) = [A[k,h]*Y[α+β] - Y[α+β+mom.eᵢⱼ(n,k,h)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
     momₜ₋₁g(j)  = mom.make_mon_expo(t-1,A,j)
-    if_diag(k) = [sqrt(A[k,k])*Lx[α+β+mom.eᵢ(n,k)] - Lx[α+β+2*mom.eᵢ(n,k)] for α ∈ momₜ₋₁g(k), β ∈ momₜ₋₁g(k)]
-    if_off_diag(k,h) = [A[k,h]*Lx[α+β] - Lx[α+β+mom.eᵢ(n,k,h)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
+    if_diag(k) = [sqrt(A[k,k])*Y[α+β+mom.eᵢ(n,k)] - Y[α+β+2*mom.eᵢ(n,k)] for α ∈ momₜ₋₁g(k), β ∈ momₜ₋₁g(k)]
+    if_off_diag(k,h) = [A[k,h]*Y[α+β] - Y[α+β+mom.eᵢ(n,k,h)] for α ∈ momₜ₋₁, β ∈ momₜ₋₁]
     return [e[1]==e[2] ? if_diag(e[1]) : if_off_diag(e[1],e[2]) for e in nze]
 end
 
-"""
-input: A(data array), LMB(moment exponent vector), Lx(JuMP variable)
-output: dictionary: Keys: (h,k) ∈ [n]², h ≠ k
-                    values:
-comment: L ≥ 0 on M₂ₜ(S^cp_A )
-(M_2t-2(xₖxₕL) )_αβ =   x^(α + β + eₖ + eₕ) 
-"""
-function make_xx_con(A,t,Lx)
-    n       = size(A)[1]
-    momₜ₋₁   = mom.make_mon_expo(n,t-1)
-    eᵢⱼs    = map( e -> mom.eᵢ(n,e[1],e[2]), mom.get_nonzero_entries(A)) 
-    return map(eᵢⱼ -> [Lx[α+β+eᵢⱼ] for α ∈ momₜ₋₁, β ∈ momₜ₋₁ ], eᵢⱼs)
-end
-
 """M(G ⊗ L) ⪰ 0 constraints
-input: A(data matrix),t(Integer),Lx(JuMP variable)
+input: A(data matrix),t(Integer),Y(JuMP variable)
 Assumption: G = A-[x]₌₁[x]₌₁ᵀ
 output: A⊗L([x]ₜ[x]ₜᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ)
 """
-function make_G_con(A,t,Lx)
+function make_G_con(A,t,Y)
     n = size(A)[1]
     LMBexp₁    = mom.make_mon_expo(n,(1,1),isle=false) #exponents of [x]₌₁[x]₌₁ᵀ
     LMBexpₜ₋₁   = mom.make_mon_expo((t-1,t-1),A)     #exponents of [x]ₜ₋₁[x]ₜ₋₁ᵀ
-    LMBₜ₋₁      = α_to_Lxᵅ(Lx,LMBexpₜ₋₁)    #L([x]ₜ₋₁[x]ₜ₋₁ᵀ)
+    LMBₜ₋₁      = α_to_Lxᵅ(Y,LMBexpₜ₋₁)    #L([x]ₜ₋₁[x]ₜ₋₁ᵀ)
 
     LMBexp₁ₜ₋₁  = mom.expo_kron(LMBexp₁,LMBexpₜ₋₁)  #exponents of([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ)
-    LMB₁ₜ₋₁     = α_to_Lxᵅ(Lx,LMBexp₁ₜ₋₁)   # L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ))
+    LMB₁ₜ₋₁     = α_to_Lxᵅ(Y,LMBexp₁ₜ₋₁)   # L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ))
 
     G_con = kron(A,LMBₜ₋₁) - LMB₁ₜ₋₁             # A⊗L([x]ₜ₋₁[x]ₜ₋₁ᵀ) - L(([x]₌₁[x]₌₁ᵀ)⊗([x]ₜ₋₁[x]ₜ₋₁ᵀ))
     return G_con
 end
 
-"""M(xᵢxⱼL) = 0  for all {i,j} s.t. Mᵢⱼ = 0"""
-function make_ideal_con(A,t,Lx) 
+"""L(xᵢxⱼ[x]₂ₜ₋₂) = 0  for all {i,j} s.t. Mᵢⱼ = 0"""
+function make_ideal_con(A,t,Y) 
     n = size(A)[1] 
-    momₜ₋₁ = mom.make_mon_expo(t-1,A)
+    mom₂ₜ₋₂ = mom.make_mon_expo(2t-2, A)
     eᵢⱼs = map( e -> mom.eᵢ(n,e[1],e[2]), mom.get_zero_entries(A))
-    return map(eᵢⱼ -> [Lx[α+β+eᵢⱼ] for α ∈ momₜ₋₁, β ∈ momₜ₋₁ ], eᵢⱼs)
+    return map(eᵢⱼ -> [Y[ α+eᵢⱼ ] for α ∈ mom₂ₜ₋₂ ], eᵢⱼs)
 end
+
+
+############################################# Sparse constraints#########################################
+
+make_spar_inds(mc,t) = [ [k,m] for  k ∈ 1:length(mc) for m in mom.make_mon_expo(length(mc[k]),2*t) ]
+
+""" ∑ Lᵧₖ(xxᵀ) = A , k ∈ [p]"""
+function make_spar_sec_ord_mom_con(M,Y)
+    n = size(M)[1]
+    mc = get_maximal_cliques(M)
+    p = length(mc)
+    xx₁ = mom.make_mon_expo(n,(1,1),isle=false)
+    Iᵏs₁ = moments.get_monomial_cliques((1,1), M)[1:end-1]
+    K = [map(α -> (α ∈ Iᵏs₁[k]) ? Y[[k,α[mc[k]]]] : 0, xx₁) for k ∈ 1:p]
+    ut = cat([[(i,j) for j ∈ i:n] for i ∈ 1:n]...,dims = 1)
+    return [(sum(K)[ij...],M[ij...])  for ij ∈ ut if M[ij...] != 0]
+end
+
+"""Lᵧₖ([x][x]ᵀ) ⪰ 0 , k ∈ [p]""" 
+function make_spar_mom_mat_con(M,t,Y)
+    mc = get_maximal_cliques(M)
+    p = length(mc)
+    Iᵏs = moments.get_monomial_cliques((t,t),M)[1:end-1]
+    Iᵏs_cut = [map(α -> [k, α[mc[k]] ], Iᵏs[k]) for k ∈ 1:p]
+    return [α_to_Lxᵅ(Y, Iᵏ) for Iᵏ ∈ Iᵏs_cut]
+end
+
+"""
+L(u) for u ∈ [x]ᵥₖ_₂ₜ for  k ∈ 1:p 
+L((√Aᵢᵢ xᵢ - xᵢ²)⋅u) for u ∈ [x]ᵥₖ_₂ₜ₋₂, k ∈ 1:p, i ∈ mc[k]
+L((Aᵢⱼ  - xᵢxⱼ)⋅u) for u ∈ [x]ᵥₖ_₂ₜ₋₂ for k ∈ 1:p  if i,j ∈ mc[k] 
+"""
+function make_spar_dag_con(A,t,Y)
+    n = size(A)[1]
+    mc = moments.get_maximal_cliques(A)
+    p = length(mc)
+    moms₂ₜ₋₂ = moments.get_monomial_cliques(2*t-2,A)[1:end-1]
+    moms₂ₜ   = moments.get_monomial_cliques(2*t,A)[1:end-1]
+    # L(u) for u ∈ [x]ᵥₖ_₂ₜ for  k ∈ 1:p 
+    oddone = [[Y[[k, a[mc[k]]]] for a in moms₂ₜ[k]] for k in 1:p]
+    # L((√Aᵢᵢ xᵢ - xᵢ²)⋅u) for u ∈ [x]ᵥₖ_₂ₜ₋₂, k ∈ 1:p, i ∈ mc[k]   
+    ondiag = [[ sqrt(A[i,i])*Y[[k, a[mc[k]]]] - Y[[k, (2*mom.eᵢ(n,i) + a)[mc[k]]]]  for a in moms₂ₜ₋₂[k]] for k in 1:p for i ∈ mc[k]]
+    # L((Aᵢⱼ  - xᵢxⱼ)⋅u) for u ∈ [x]ᵥₖ_₂ₜ₋₂ for k ∈ 1:p  if i,j ∈ mc[k] 
+    offdiag = [[ A[i,j]*Y[[k, a[mc[k]]]] - Y[[k, (mom.eᵢ(n,i) + mom.eᵢ(n,j) + a)[mc[k]]]]  for a in moms₂ₜ₋₂[k]] for k in 1:p for i ∈ mc[k] for j ∈ setdiff(Set(mc[k]),Set([i]))]
+    return [oddone..., offdiag..., ondiag...]
+end
+
+"""
+L(xᵢxⱼu) for u ∈ [x]ᵥₖ_₂ₜ₋₂ ; i,j ∈ mc[k], k ∈ [p] 
+"""
+function make_spar_xx_con(A,t,Y)
+    n = size(A)[1]
+    mc = moments.get_maximal_cliques(A)
+    p = length(mc)
+    momsₜ₋₁ = moments.get_monomial_cliques(t-1,A)
+    # L(xᵢxⱼu) for u ∈ [x]ᵥₖ_₂ₜ₋₂ ; i,j ∈ mc[k],  k ∈ [p]  
+    return [[ Y[[k,(a + b + mom.eᵢ(n,i) + mom.eᵢ(n,j))[mc[k]]]] for a in momsₜ₋₁[k], b ∈ momsₜ₋₁[k]] for k ∈ 1:p for i ∈ mc[k] for j ∈ setdiff(Set(mc[k]),Set([i]))  ]
+end
+
+""" Lᵧₖ((√Aᵢᵢxᵢ-xᵢ²)[x]ₜ₋₁[x]ₜ₋₁ᵀ) ⪰ 0 , i ∈ Vₖ
+    Lᵧₖ((Aᵢⱼ-xᵢxⱼ)[x]ₜ₋₁ᵥₖ[x]ₜ₋₁ᵥₖᵀ) ⪰ 0 , i,j ∈ Vₖ, k ∈ [p] """
+function make_spar_loc_con(M,t,Y)
+    n = size(M)[1]
+    mc = get_maximal_cliques(M)
+    p = length(mc)
+    Iᵏs = get_monomial_cliques(t-1,M)
+    arr = [[[term(M,n,mc,e,k,Y,α,β) for α ∈ Iᵏs[k], β∈ Iᵏs[k]]       # iterate over monomial exponent ass. to a clique
+                                     for e ∈ clique_ele_pairs(mc[k])] # iterate over each pair of element of the clique
+                                     for k ∈ 1:p]                     # iterate over each clique
+    return cat(arr...,dims=1) 
+end
+clique_ele_pairs(m) = unique([sort([i,j]) for i ∈ m, j ∈ m])
+term(M,n,mc,e,k,Y,α,β) = e[1] == e[2] ? d_term(M,Y,n,mc,k,e,α,β) : od_term(M,Y,n,mc,k,e,α,β)
+d_term(M,Y,n,mc,k,e,α,β)   = sqrt(M[e...])*Y[ [k, ( α+β+eᵢ(n,e[1]) )[mc[k]]] ] - Y[ [k, ( α+β + eᵢ(n,e[1],e[2]) )[mc[k]]] ] # Lᵧₖ((√Aᵢᵢxᵢ-xᵢ²)xᵅ)
+od_term(M,Y,n,mc,k,e,α,β)  =      M[e...] *Y[ [k, ( α+β            )[mc[k]]] ] - Y[ [k, ( α+β + eᵢ(n,e[1],e[2]))[mc[k]] ]]  # Lᵧₖ((Aᵢⱼ-xᵢxⱼ)xᵅ)
+
+
+"""Lᵧₖ( [x]ₜ₋₁ᵥₖ[x]ₜ₋₁ᵥₖᵀ ⊗ (A-xxᵀ)|_vₖ) ⪰ 0 , k ∈ [p]"""
+function make_spar_G_con(A,t,Y,isWeak=false)
+    n = size(A)[1]
+    mc = get_maximal_cliques(A)
+    p = length(mc)
+    Iᵏs = get_monomial_cliques((t-1,t-1),A)
+    xx₁ = mom.make_mon_expo(n,(1,1),isle=false)
+    
+    if isWeak
+        lt_w(k) = kron(map(α -> Y[[k,α[mc[k]]]], Iᵏs[k]), A[mc[k],mc[k]])                   # Lᵧₖ([x]ₜ₋₁ᵥₖ[x]ₜ₋₁ᵥₖᵀ ⊗ A|ᵥₖ)
+        rt_w(k) = map(α -> Y[[k,α[mc[k]]]], expo_kron(Iᵏs[k], xx₁[mc[k],mc[k]]))            # Lᵧₖ([x]ₜ₋₁ᵥₖ[x]ₜ₋₁ᵥₖᵀ ⊗ xxᵀ|ᵥₖ)
+        return [lt_w(k) - rt_w(k) for k in 1:p]
+    else
+        lt(k) = kron(map(α -> Y[[k,α[mc[k]]]], Iᵏs[k]), A)                                  # Lᵧₖ([x]ₜ₋₁ᵥₖ[x]ₜ₋₁ᵥₖᵀ ⊗ A)
+        rt(k) = map(α ->  isinmc(α, mc[k]) ? Y[[k,α[mc[k]]]] : 0, expo_kron(Iᵏs[k], xx₁))    # Lᵧₖ([x]ₜ₋₁ᵥₖ[x]ₜ₋₁ᵥₖᵀ ⊗ xxᵀ|ᵥₖ₌₀  )
+        return [lt(k) - rt(k) for k in 1:p]
+    end
+end
+isinmc(α,mck) = all([j ∈ mck for j ∈ findall(α .> 0)])
+
+"""∑ Lᵧₖ(1)"""
+make_obj(mc,Y) = sum([Y[[k,zeros(Int,length(mc[k]))]] for k in 1:length(mc)])
 
 ############################################### Utility #########################################
 """(L,[α]ᵢⱼ) → [L(xᵅ)]ᵢⱼ """
-α_to_Lxᵅ(Lx, index_array) = map(α -> Lx[α], index_array)
-
+α_to_Lxᵅ(Y, index_array) = map(α -> Y[α], index_array)
+α_to_Lxᵅ(Y, index_array, mck) =  map(γ -> Y[[k,γ[mck]]], index_array)
 
 function run_tests()
     @testset "sparse" begin
@@ -114,54 +209,4 @@ end
 end
 
 
-# α_to_Lxᵅ(Y, index_array,k,mc) =  map(γ -> Y[[k,γ[mc[k]]]], index_array)
-# """A ∈ (ℕⁿ)ᵃˣᵇ, B ∈ (ℕⁿ)ᶜˣᵈ --> D ∈ (ℕⁿ)ᵃᶜˣᵇᵈ : D₍ᵢⱼ,ₖₕ₎ = Aᵢₖ + Bⱼₕ"""
-# function expo_kron(A,B)
-#     n₁,n₂ = size(A)
-#     D = [B + repeat( [A[i,j]] , inner = (1,1), outer = size(B)) for i in 1:n₁ , j in 1:n₂ ]
-#     return cat([cat(D[i,:]...,dims=2) for i in 1:n₁]...,dims=1)
-# end
 
-# ################ Hannkel constraints for sparsity
-# """For each monomial xᶜ ∈ [x]ₜ[x]ₜᵀ that occures more than twice (accounting for symmetry)
-#    We generate the set of affine expressions: {∑ₖ Yᵏₐᵦ | a + b = c}"""
-# function make_Hankel_con(A,t,Y) 
-#     Yᵏs = moments.make_Yᵏs(t,A)
-#     Hank_Yks = get_Hank_Yᵏs(t,A)
-#     return[[sum(Y[pena(e,Yᵏs)]) for e in eq] for eq in Hank_Yks]
-# end
-# pena(ent,Yᵏs) = map(αβ -> Yᵏs[αβ[1]][αβ[2]],ent)
-# """Returns a matrix of the size of the moment matrix L([x]ₜ[x]ₜᵀ)[I] but with entries
-# integers. Entries with the same integers have the same monomial"""
-# function get_Hank_grid(t,M)
-#     meₜₜ = moments.make_mon_expo((t,t),M)
-#     mm_supp = moments.get_mom_mat_supp(t,M)
-
-#     γ_set = unique(meₜₜ)
-#     γ_dict = Dict(zip(γ_set,1:length(γ_set)))
-
-#     n_m = size(meₜₜ)[1]
-#     up_tri = [i ≤ j ? 1 : 0 for i ∈ 1:n_m, j ∈ 1:n_m ]
-#     return [ γ_dict[γ] for γ ∈ meₜₜ] .* mm_supp .* up_tri 
-# end
-# """ select only monomials that occure more than once and are supported"""
-# get_Hank_list(Hank_grid) = [findall(Hank_grid .== a) for a ∈ sort(unique(Hank_grid))[2:end] if length(findall(Hank_grid .== a)) > 1 ] 
-# """ find the coordinates of monomials as they occure in Yᵏ"""
-# function get_Hank_Yᵏs(t,M)
-#     meₜ = moments.make_mon_expo(t,M)
-#     Y = [sort([α,β]) for α ∈ meₜ, β ∈ meₜ]
-#     Yᵏs = moments.make_Yᵏs(t,M)
-#     Hank_grid = get_Hank_grid(t,M)
-#     Hank_list = get_Hank_list(Hank_grid)
-#     return [[map(α -> α[1],find_Yᵏ_coords(Y[co],Yᵏs)) for co ∈ h] for h ∈ Hank_list]
-# end
-# function find_Yᵏ_coords(αβ,Yᵏs)
-#     p = length(Yᵏs)
-#     find_k_s(αβ,Yᵏs,k) = findall([αβ] .==  get_Yᵏ_ind(Yᵏs[k]))
-#     return [ [[k,f] for f in find_k_s(αβ,Yᵏs,k)] for k ∈ 1:p if find_k_s(αβ,Yᵏs,k) != []]  
-# end
-# function get_Yᵏ_ind(Yᵏ)
-#     n_Y = size(Yᵏ)[1]
-#     return [ i ≥ j ? Yᵏ[i,j][2] : [] for j ∈ 1:n_Y, i ∈ 1:n_Y]
-# end
-# #################33
