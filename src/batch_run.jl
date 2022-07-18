@@ -7,36 +7,83 @@ using Plots
 using Plots.PlotMeasures
 
 proj_dir = dirname(@__FILE__)*"\\"
-include(proj_dir*"cp_matrices.jl")
+include(proj_dir*"matrix_IO.jl")
 include(proj_dir*"moments.jl")
 include(proj_dir*"cp_model.jl")
-include(proj_dir*"cp_rank.jl")
+include(proj_dir*"nn_model.jl")
+include(proj_dir*"extract_atoms.jl")
 
-using .cp_matrices ; const cpm = cp_matrices
+
 using .moments ; const mom = moments
 using .cp_model
-using .cp_rank
 
-export  get_mat_data,
-        batch_comp_and_save,
+export  batch_comp_and_save,
         make_summary,
         clean_summary,
-        clean_clean_summary,
         plot_bounds,
         plot_times,
-        save_moments,
-        load_moments
+        get_all_mom_mat_ranks
 
-function batch_comp_and_save(Mats_dict, t, save_dir, flavs,G_act=true)
-    for M_name in sort([keys(Mats_dict)...])
-        M = Mats_dict[M_name]
-        for fla ∈ flavs  # 
-            comp_save_path = save_dir*"ξₜᶜᵖ_$(M_name)_$(fla)_t$(t).txt"
-            _ , ex_moments = cp_rank.get_ξₜᶜᵖ(M ,t, fla, comp_save_path,G_act)
-            mom_save_path = save_dir*"Mom_$(M_name)_$(fla)_t$(t).csv"
-            save_moments(ex_moments, mom_save_path)
+
+function get_ξₜ(args)
+    if contains(args[3],"nn")
+        ξₜ, ex_moments = nn_model.get_ξₜⁿⁿ(args...)
+        # matrix_IO.save_moments(ex_moments, mom_save_path)
+    elseif contains(args[3],"cp")
+        ξₜ, ex_moments = cp_model.get_ξₜᶜᵖ(args...)
+        matrix_IO.save_moments(ex_moments, mom_save_path)
+    else
+        error("Must specify if the matrix is cp or just nn")
+    end
+    return ξₜ, ex_moments  
+end
+
+function get_ξₜ(args, save_path::String)
+    ξₜ, mom, s = capture_solver_output(get_ξₜ, args) # args = (M ,t, flavour)
+    write_solver_output(s, save_path)
+    return ξₜ, mom
+end
+function capture_solver_output(func,args)
+    original_stdout = stdout;
+    (rd, _) = redirect_stdout();
+    ξₜ, mom = func(args)
+    s = []
+    for rl in eachline(rd)
+        push!(s,rl)
+        if contains(rl,"Objective:")
+            break
         end
     end
+    redirect_stdout(original_stdout);
+    return ξₜ, mom, s
+end
+function write_solver_output(s,save_path)
+    touch(save_path)
+    open(save_path, "w") do io
+        for line in s
+            write(io, line*"\n")
+        end
+    end;
+end
+
+
+function batch_comp_and_save(mats_dict, t, flavs, save_dir)
+    mt = contains(flavs[1],"nn") ? "nn" : "cp"
+    moments_dir = save_dir*"\\moments\\"
+    !isdir(moments_dir) ? mkdir(moments_dir) : 0
+    for n in sort([keys(mats_dict)...])
+        M = mats_dict[n]
+        for f ∈ flavs  
+            comp_save_path = save_dir*"ξₜ$(mt)_$(n)_$(f)_t$(t).txt"
+            # mom_save_path  = moments_dir*"Mom_$(n)_$(f)_t$(t).csv"
+            try
+                _, ex_moments = get_ξₜ((M ,t, f), comp_save_path)
+            # matrix_IO.save_moments(ex_moments, mom_save_path)
+            catch
+            end
+        end
+    end
+    return nothing
 end
 
 ### Summarize data-------------------------------------
@@ -44,128 +91,118 @@ end
 function make_summary(assets_dir)
     file_loc = assets_dir*"summary.csv"
     create_summary_file(file_loc)
-
     fs = readdir(assets_dir)
-    text_file_names = fs[map(f -> contains(f,".txt"),fs)]
-    for comp_name in text_file_names
-        mat_name = join(split(comp_name,'_')[2:end-2],'_')
-        println(comp_name)
-        mod = split(comp_name,'_')[end-1]
-        try
-            isP, isD, obj_v, sol_t = read_comp_file(assets_dir*comp_name)
+    tfns = fs[map(f -> contains(f,".txt"),fs)]
+    for tf ∈ tfns
+        n = join(split(tf,'_')[2:end-2],'_')
+        m = split(tf,'_')[end-1]
+        # try
+            isP, isD, isUnkown, obj_v, sol_t = read_comp_file(assets_dir*tf)
             open(file_loc,"a") do io
-                write(io, "|$mat_name|$mod|$isP|$isD|$obj_v|$sol_t| \n")
+                write(io, "$n,$m,$isP,$isD,$isUnkown,$obj_v,$sol_t \n")
             end
-        catch
-            open(file_loc,"a") do io
-                write(io, "|$mat_name|$mod|0|0|0|0| \n")
-            end
-        end
+            println(tf*"-----------------success")
+        # catch
+        #     open(file_loc,"a") do io
+        #         write(io, "$n,$m,,,, \n")
+        #     end
+        #     println(tf*"-----------------fail")
+        # end
     end
 end
 function create_summary_file(file_loc)
     touch(file_loc)
     open(file_loc,"a") do io
-        write(io, "|name|mod|isP|isD|obj_v|sol_t|\n")
+        write(io, "name,mod,isP,isD,isUnkown,obj_v,sol_t\n")
     end
 end
 function read_comp_file(f_path)
     s = open(f_path) do file
         read(file, String)
     end
+    ext_text  = replace(s[end-110:end], '\n'=>' ')
+    isPF = contains(ext_text,"Primal: FEASIBLE_POINT") 
+    isDF = contains(ext_text,"Dual: FEASIBLE_POINT") || contains(ext_text,"Dual: INFEASIBILITY_CERTIFICATE")
+    isUnkown = false
+    if contains(ext_text,"Primal: UNKNOWN_RESULT_STATUS") ||  contains(ext_text,"Dual: UNKNOWN_RESULT_STATUS")
+        isPF = isDF = false
+        isUnkown = true
+    end
 
-    nar = replace(s[end-95:end], '\n'=>' ')
-    isPF = contains(nar,"Primal: FEASIBLE_POINT") 
-    isDF = contains(nar,"Dual: FEASIBLE_POINT") 
+    spl  = split(ext_text)
+    sol_time = round(parse(Float64, spl[findall(spl .== "Time:")[1]+1]), digits=2) 
+    if (isPF && isDF && !isUnkown)
+        obj_val  = round(parse(Float64,spl[end]), digits=2)
+    elseif isUnkown
+        obj_val  = "?" 
+    else
+        obj_val  = "*"
+    end
 
-    spl_kat  = split(nar)
-    sol_time = parse(Float64, spl_kat[findall(spl_kat .== "Time:")[1]+1])  
-    obj_val  = round(parse(Float64,spl_kat[9]), digits=5)  
+    return isPF, isDF, isUnkown, obj_val, sol_time
+end
+#---------------------------------------------------------------------------------------
+function clean_summary(results_dir)
+    s_name = results_dir*"summary.csv"
 
-    return isPF, isDF, obj_val, sol_time
+    df_s = CSV.read(s_name, DataFrame,delim =",")
+    df_obj_v = unstack(df_s, [:name], :mod, :obj_v, allowduplicates=true)
+    df_time  = unstack(df_s, [:name], :mod, :sol_t, allowduplicates=true)
+
+    df = innerjoin(df_obj_v, df_time, on = [:name],makeunique=true)
+    
+    CSV.write(results_dir*"clean_summary.csv", df) 
+    return df
 end
 
-function clean_summary(assets_dir)
-    f_name = assets_dir*"summary.csv"
-    df = CSV.read(f_name,DataFrame,delim ="|")[:,2:end-1]
-    df_obj_v = unstack(df, [:name], :mod, :obj_v, allowduplicates=true)
-    rename!(df_obj_v , :id => :id_obj_v, :sp => :sp_obj_v, :wsp  => :wsp_obj_v )
-    select!(df_obj_v,[:name, :id_obj_v, :sp_obj_v, :wsp_obj_v]) 
 
-    df_time  = unstack(df, [:name], :mod, :sol_t, allowduplicates=true)
-    rename!(df_time, :id => :id_time_s, :sp => :sp_time_s, :wsp => :wsp_time_s)
-    select!(df_time,[:name, :id_time_s, :sp_time_s, :wsp_time_s])
+function clean_summary(results_dir, data_dir)
+    d_name = data_dir*"mat_data.csv"
+    s_name = results_dir*"summary.csv"
 
-    df = innerjoin(df_obj_v, df_time, on = [:name])
-    df.id_obj_v  = round.(df.id_obj_v  ,digits=2)
-    df.sp_obj_v  = round.(df.sp_obj_v  ,digits=2) 
-    df.wsp_obj_v = round.(df.wsp_obj_v ,digits=2)
+    df_s = CSV.read(s_name, DataFrame,delim =",")
+    df_obj_v = unstack(df_s, [:name], :mod, :obj_v, allowduplicates=true)
+    df_time  = unstack(df_s, [:name], :mod, :sol_t, allowduplicates=true)
 
-    CSV.write(assets_dir*"clean_summary.csv", df) 
-end
-
-function clean_clean_summary(assets_dir, data_file)
-    f_name = assets_dir*"clean_summary.csv"
-    df_1 = CSV.read(data_file, DataFrame, delim ="&")
-    df_2 = CSV.read(f_name, DataFrame, delim =",")
-
-    df = innerjoin(df_1, df_2 , on = [:name])
-    select!(df, [:ex ,:n, :nzd, :nc, :mc, :r, :id_obj_v, :sp_obj_v, :wsp_obj_v, :ucpr , :id_time_s, :sp_time_s, :wsp_time_s])
+    df_s = innerjoin(df_obj_v, df_time, on = [:name],makeunique=true)
+    df_d = select!(CSV.read(d_name, DataFrame, delim =","), [:name, :ex ,:n, :nzd, :nc, :mc, :r, :ucpr])
+    df = innerjoin(df_d, df_s , on = [:name])
 
     df.n = Int.(df.n)
     df.r = Int.(df.r)
     df.ucpr = Int.(df.ucpr)
 
-    df.id_obj_v = round.(df.id_obj_v,digits=2) 
-    df.sp_obj_v = round.(df.sp_obj_v,digits=2) 
-    df.wsp_obj_v = round.(df.wsp_obj_v,digits=2) 
-
-    df.id_time_s = round.(df.id_time_s,digits=2) 
-    df.sp_time_s = round.(df.sp_time_s,digits=2) 
-    df.wsp_time_s = round.(df.wsp_time_s,digits=2)  
-
-    CSV.write(assets_dir*"clean_clean_summary.csv", df,delim="&") 
-end
-function split_name(name) 
-    dar = split(name,'_')
-    ex   = dar[1]
-    n    = parse(Int64,dar[2][2:end])
-    zd   = parse(Float64,dar[3][4:end])
-    r    = parse(Int64,dar[4][2])
-    ucpr = parse(Int64,dar[5][5:end])
-    return [n, zd, r, ucpr]
+    CSV.write(results_dir*"clean_summary.csv", df) 
+    return df
 end
 
-function get_mat_data(data_dir)
-    mats = cp_matrices.load_mats(data_dir)
-    K = [keys(mats)...]
-    mcs = map(k -> moments.get_maximal_cliques(mats[k]), K)
-    num_cliq = length.(mcs) 
-    max_cliq = [maximum(length.(mc)) for mc in mcs ]
-    dara = cat(map(name->split_name(name), [keys(mats)...])..., dims=2)'
-    df = DataFrame(     name = K,
-                        ex   = map(name -> name[1:4],K), 
-                        n    = dara[:,1],
-                        nzd  = dara[:,2],
-                        r    = dara[:,3],
-                        ucpr = dara[:,4],
-                        nc   = num_cliq,
-                        mc   = max_cliq)
-   
-    CSV.write(data_dir*"mat_data.csv", df, delim="&")
-end
-get_z_dense(M) = sum(M .== 0) / ((size(M)[1])*(size(M)[1]-1))
+# function clean_clean_summary(assets_dir, data_dir)
+#     d_name = data_dir*"mat_data.csv"
+#     r_name = assets_dir*"clean_summary.csv"
+    
+#     df_d = select!(CSV.read(d_name, DataFrame, delim =","), [:name, :ex ,:n, :nzd, :nc, :mc, :r, :ucpr])
+#     df_r = CSV.read(r_name, DataFrame, delim =",")
+    
+#     df = innerjoin(df_d, df_r , on = [:name])
+
+#     df.n = Int.(df.n)
+#     df.r = Int.(df.r)
+#     df.ucpr = Int.(df.ucpr)
+
+#     CSV.write(assets_dir*"clean_clean_summary.csv", df,delim="&") 
+# end
+
 
 ### PLOTS -------------------------------------
 
 function plot_bounds(ex_save_dir,t)
     df = CSV.read(ex_save_dir*"clean_clean_summary.csv", DataFrame,delim ="&")
     n = length(df.n)
-    np = df.n[1]
-    objs = scatter([1:n], Matrix(df[:,[:id_obj_v, :sp_obj_v, :wsp_obj_v]]),  # , :ucpr
+    bounds =  names(df)[end-5:end-3]
+    objs = scatter([1:n], Matrix(df[:,bounds]),  # , :ucpr
                                     xticks=(1:n, df.n),# df.ex .*"_n=".* string.(Int.(df.n))),
-                                    yticks= Int(round(minimum(df.sp_obj_v)-1)):Int(round(maximum(df.sp_obj_v)+1)),
-                                    yrange=[Int(round(minimum(df.wsp_obj_v)-1)),Int(round(maximum(df.sp_obj_v)+1))],
+                                    yticks= Int(round(minimum(df[:,bounds[2]])-1)):Int(round(maximum(df[:,bounds[2]])+1)),
+                                    yrange=[Int(round(minimum(df[:,bounds[3]])-1)),Int(round(maximum(df[:,bounds[2]])+1))],
                                     # xlabel="non-zero density for $(np)x$(np) matrices",
                                     xlabel="Size of the matrix",
                                     ylabel="bound",
@@ -184,166 +221,67 @@ function plot_bounds(ex_save_dir,t)
 end
 
 function plot_times(ex_save_dir,t)
-    df = CSV.read(ex_save_dir*"clean_clean_summary.csv", DataFrame,delim ="&")
+    df = CSV.read(ex_save_dir*"clean_summary.csv", DataFrame,delim =",")
     n = length(df.n)
-    np = df.n[1]
-    objs = scatter([1:n], Matrix(df[:,[:id_time_s, :sp_time_s, :wsp_time_s]]) .+ 1.0,  # , :ucpr
-                                        xticks=(1:n, df.n),#df.ex .*"_nzd=".* string.(df.nzd)),# xlabel="Non-zero density for $(np)x$(np) matrices",
-                                        xlabel="Size of the matrix",
+    times = names(df)[end-2:end]
+    objs = scatter([1:n], Matrix(df[:,times]) .+ 1.0,  # , :ucpr
+                                        xticks=(1:n, df.nzd),#df.ex .*"_nzd=".* string.(df.nzd)),# xlabel="Non-zero density for $(np)x$(np) matrices",
+                                        xlabel="Size and nonzero density of the matrix",
                                         ylabel="time(s)",
                                         xrotation=90,
                                         left_margin = 20px,
                                         bottom_margin = 60px,
-                                        label = ["ξₜᶜᵖ⁻ⁱᵈ" "ξₜᶜᵖ⁻ˢᵖ" "ξₜᶜᵖ⁻ʷˢᵖ"], # "e-rank_cp"
+                                        label = ["id" "sp" "wsp"], # "e-rank_cp"
                                         legend=:topleft,
                                         fillalpha = 0.1,
                                         yscale=:log10,
                                         markershape = [:square :diamond :circle],
-                                        markersizes = [6 6 4],
+                                        markersizes = [4 4 3],
                                         markercolors = [:red :yellow :green],
                                         title = "Hierarchy times at t=$t",
-                                        size = (900, 600) )     #  :hline 
-    savefig(objs, ex_save_dir*"times_t=$(t).png")                                    
+                                        size = (1200, 600) )     #  :hline                                 
+    savefig(objs, ex_save_dir*"times_t=$(t).png")    
+                                   
 end
-
-
-### Moments
-function save_moments(ext_mom, save_path)  
-    df = DataFrame( mom_inds = ext_mom[:,1],
-                    mom_vals = ext_mom[:,2]) 
-    CSV.write(save_path, df)
-end
-
-"""moment matrix M₂ₜ(y)"""
-function load_moments(n::Int, t::Tuple{Int,Int}, load_path::String) 
-    mom_vals = load_moments(load_path).mom_vals
-    mom_dict = make_mom_dict(n::Int,t[1], mom_vals)
-    return map(a -> mom_dict[a], make_mon_expo(n, (t[1],t[2])))
-end
-"""Dictionary of monomial exponent β ∈ ℕⁿ₂ₜ keys and values yᵦ"""
-function make_mom_dict(n::Int,t::Int, mon_vals)
-    # @assert length(mon_vals) ....
-    mon_expo = make_mon_expo(n,2t)
-    Dict(zip(mon_expo, mon_vals))
-end
-load_moments(load_path) = CSV.read(load_path, DataFrame)
-
 
 #---------------------------   
-       
-
-
+function get_all_mom_mat_ranks(moment_dir::String)
+    moment_files = readdir(moment_dir)
+    mat_df = hcat([[mf,[get_mom_mat_ranks(moment_dir*mf)]] for mf in moment_files]...)
+    df = DataFrame( example = mat_df[1,:],
+                    ranks   = mat_df[2,:]) 
+    CSV.write(dirname(moment_dir)*"_ranks.csv", df)
 end
 
-### Exploratory -------------------------------------
+function get_mom_mat_ranks(mom_path::String)
+    df             = matrix_IO.load_moments(mom_path)
+    n, t, mom_vals = extract_atoms.proc_mom(df)
+    return get_mom_mat_ranks(n, t, mom_vals)
+end
+get_mom_mat_ranks(n::Vector{Int64}, t, mom_vals) = [get_mom_mat_ranks(n[j], t, mom_vals[j]) for j in 1:length(n)  ]
+function get_mom_mat_ranks(n::Int64, t, mom_vals)
+    r = []
+    for j in 1:t
+        mom_mat_thing  = extract_atoms.get_mom_mat(n, j, mom_vals)
+        mom_mat        = [m for m in mom_mat_thing.Q]
+        push!(r, lowrankchchek(mom_mat))
+    end
+    return r
+end
 
-# function get_batch_mat_support(load_dir,t=2)
-#     Mats_dict = batch_run.load_batch_sparse_cp_mats(load_dir)
-#     for mat_name in keys(Mats_dict)
-#         M = Mats_dict[mat_name]
-#         mat_supp = cp_rank.show_mat_support(M) ;
-#         mom_mat_supp = cp_rank.show_mat_support(moments.get_mom_mat_supp(t,M))
-#         ten_con_supp = cp_rank.show_mat_support(moments.get_ten_con_supp(t,M))   
+function lowrankchchek(M::AbstractMatrix, ranktol =1e-4)
+    F = svd(M)
+    nM = F.S[1] # norm of M
+    tol = nM * ranktol
+    r = something(findfirst(σ2 -> σ2 <= tol, F.S), 0)
+    if iszero(r)
+        cM = ranktol
+        r = length(F.S)
+    else
+        cM = F.S[r] / nM
+        r -= 1
+    end
+    r
+end
 
-#         save(load_dir*"supp_"*mat_name*".png", mat_supp)
-#         save(load_dir*"mom_supp_t$t"*mat_name*".png", mom_mat_supp)
-#         save(load_dir*"ten_supp_t$t"*mat_name*".png", ten_con_supp)
-#     end
-# end
-
-# function get_matrix_sizes(M,t)
-#     n = size(M)[2]
-#     siz_Mₜ_spar =  length(mom.make_mon_expo(n,t,M))
-#     siz_Mₜ =length(mom.make_mon_expo(n,t))
-#     siz_MₜG_spar = length(mom.make_mon_expo(n,t-1,M))*n
-#     siz_MₜG = length(mom.make_mon_expo(n,t-1))*n
-#     return siz_Mₜ, siz_Mₜ_spar, siz_MₜG, siz_MₜG_spar
-# end
-
-# function plot_summary(save_dir)
-#     df = CSV.read(save_dir*"clean_clean_summary.csv",DataFrame,delim =",")
-#     dara = cat(map(name->split_name(name), df.name )..., dims=2)'
-#     df_n = DataFrame(name = df.name,
-#                         n    = dara[:,1],
-#                         p    = dara[:,2],
-#                         r    = dara[:,3],
-#                         ucpr = dara[:,4])
-#     plot_df = select!(innerjoin(df_n, df, on = [:name]),[:n, :r, :id_obj_v,  :sp_obj_v,  :wsp_obj_v, :ucpr])
-#     n = size(plot_df)[1]
-#     objs = scatter([1:n], Matrix(plot_df[:,[:r, :id_obj_v, :sp_obj_v, :wsp_obj_v]]),  # , :ucpr
-#                                 xticks=(1:n,plot_df.n),
-#                                 yticks=(5:15,5:15),
-#                                 xlabel="size",
-#                                 ylabel="bound",
-#                                 xrotation=90,
-#                                 # bottom_margin = 130px,
-#                                 label = ["rank" "ξₜᶜᵖ⁻ⁱᵈ" "ξₜᶜᵖ⁻ˢᵖ" "ξₜᶜᵖ⁻ʷˢᵖ"], # "e-rank_cp"
-#                                 legend=:topleft,
-#                                 fillalpha = 0.1,
-#                                 markershape = [:hline :xcross :cross :rtriangle],
-#                                 size = (900, 600) )     #  :hline  
-#     return objs
-# end   
-# function split_name(name)
-#     spname = split(name,'_')
-#     n = parse(Int, spname[2][2:end])
-#     zd = parse(Float64, spname[3][3:end])
-#     r = parse(Int, spname[4][2:end])
-#     ucpr = parse(Int, spname[5][5:end])
-#     return [n,zd,r,ucpr]
-# end
-
-
-### -------------------------------------
-    # mom_save_path = save_dir*"Moments_$(M_name)_t$(t)_$cons.csv"
-    # save_moments(ξₜᶜᵖ,n,t,mom_save_path)
-
-# function read_comp_file_name(f_name)
-#     spl_name = split(f_name, '_')
-#     n   =  parse(Int64, spl_name[3][2])
-#     ex  =  spl_name[4]
-#     r   =  parse(Int64, spl_name[5][2:end])
-#     rp  =  parse(Int64, spl_name[6][3:end])
-#     t   =  parse(Int64, spl_name[7][2])
-#     con =  spl_name[8][1:end-4]
-#     return n, ex, r, rp ,t ,con
-# end
-
-# n, ex, r, rp ,t ,con = read_comp_file_name(comp_name) 
-# mat_dir  = assets_dir*"mats\\"
-    # mom_dir  = assets_dir*"moments\\"
-    # Mats_dict = load_batch_sparse_cp_mats(mat_dir)
-# sm, sms, smg, smgs = get_matrix_sizes(Mats_dict[mat_name[1:end-4]], t)
-#mom_name = "Moments"*comp_name[12:end-4]*".csv"
-#mom_rank = get_moment_ranks(n,t,load_moments(mom_dir*mom_name))    
-### -------------------------------------
-
-### summary_moments-------------------------------------
-# function make_summary_moments(save_dir)
-#     mom_names = readdir(save_dir)
-#     mom_ranks = []
-#     for mom in mom_names
-#         n,t = get_n_t(mom)
-#         mom_dict = load_moments(save_dir*mom) 
-#         mom_mat_rank_seq = get_moment_ranks(n,t,mom_dict)
-#         push!(mom_ranks,mom_mat_rank_seq)
-#     end
-#     return mom_ranks
-# end
-
-# get_moment_ranks(n,t,mom_dict) = [significant_sings.(get_mom_mat_val_seq(n,t,mom_dict))]
-# function significant_sings(M) 
-#     u, s, v  = LinearAlgebra.svd(M)
-#     return  sum(cumsum(s) .<  0.99*cumsum(s)[end])
-# end
-# #get_moment_ranks(n,t,mom_dict) = [rank.(get_mom_mat_val_seq(n,t,mom_dict))]
-# get_mom_mat_val_seq(n,t,mom_dict) = [α_to_Lxᵅ(mom_dict, mom_mat) for mom_mat ∈ get_mom_mat_seq(n,t)]
-# get_mom_mat_seq(n,t) = [mom.make_mon_expo(n,(i,i)) for i ∈ 1:t]
-# α_to_Lxᵅ(mom_dic::Dict{Vector{Int64}, Float64}, index_array) = map(α -> mom_dic[α], index_array)
-# function get_n_t(mom_name) 
-#     n = parse(Int,split(mom_name,'_')[3][2])
-#     t = parse(Int,split(mom_name,'_')[end-1][2])
-#     return n,t
-# end
-
-# ### ----------
+end

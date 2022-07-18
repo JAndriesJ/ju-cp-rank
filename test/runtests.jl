@@ -2,7 +2,11 @@ using ju-cp-rank
 using Test
 
 
-include(dirname(dirname(@__FILE__))*"\\test\\TestcpMatrices.jl")
+include(dirname(dirname(@__FILE__))*"\\test\\nn_matrices_test.jl")
+
+
+
+
 include(dirname(dirname(@__FILE__))*"\\test\\TestMoments.jl")
 include(dirname(dirname(@__FILE__))*"\\test\\TestConstraints.jl")
 

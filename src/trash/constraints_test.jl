@@ -1,4 +1,4 @@
-module TestConstraints
+module constraints_test
 using Test
 using JuMP
 proj_dir = dirname(dirname(@__FILE__))*"\\src\\"
@@ -33,4 +33,16 @@ for key in keys(cp_mats)
         @test size(G_con)[1]  == binomial(n+t-1,t-1)*n
     end
 end
-end  # module TestConstraints
+
+function run_tests()
+    @testset "sparse" begin
+        # @test var_inds = get_var_inds(mc,t) 
+        # @test sort(unique([ b  for (a,b) ∈ var_inds])) ==  sort(mom.make_mon_expo(length(mc[k]),2*t))
+        # @test length(spar_pos_cons) == length(cat(get_maximal_cliques(M)...,dims=1))
+        # @test length(spar_loc_cons) == length(cat([nz(m) for m in get_maximal_cliques(M)]...,dims=1))
+    end
+end
+
+
+end 
+
