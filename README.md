@@ -30,9 +30,9 @@ M =    [1.0       0.707107  0.0       0.0       0.447214
         0.447214  0.0       0.0       0.223607  1.0]
 # set the level of the hierarchy
 lvl = 1 
-# choose which constraitns to inclued (see ... in the publication)
+# choose which constraitns to inclued (see the publication)
 cons  = join(["G","dag","ddag","xx"][[1,2,4]],"")
-# choose from the three main hierarchies (see ... in the publication)
+# choose from the three main hierarchies (see the publication)
 hier = ["id", "sp", "wsp"][2] 
 # Define the model and run the optimization
 ξₜᶜᵖⁱᵈ , _ = cp_model.get_ξₜᶜᵖ(M,lvl,hier*cons);
